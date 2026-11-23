@@ -8,6 +8,9 @@ out/
 *.nessus
 *.nessus.md
 
+# Excepcion: el fixture de tests SI se versiona (lo usa el parser y el checker)
+!tests/fixtures/sample.nessus
+
 # --- Python -------------------------------------------------------------------
 __pycache__/
 *.pyc
