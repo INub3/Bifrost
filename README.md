@@ -2,6 +2,7 @@
 
 **Charla:** *Del hallazgo al dominio — lo que Tenable reporta y el red team demuestra.*
 **Stack congelado:** Tenable One (Vulnerability Management + Attack Path Analysis) · VMware Workstation Pro 17.x / Fusion 13.x · ESC8 como final.
+**Versión:** v1.0.0 — desarrollo cerrado (2026-11-22). Cambios en [CHANGELOG.md](CHANGELOG.md).
 
 Diseño narrativo completo en [BIFROST-LAB.md](BIFROST-LAB.md). La construcción ordenada con
 gates está en [BUILD.md](BUILD.md). Este README es la parte operativa.
@@ -172,6 +173,7 @@ primera conexión, antes de que exista la sesión con variables cargadas.
 | `runbook/DEMO-RUNBOOK.md` | Guion minuto a minuto con comandos copy/paste |
 | `docs/VALUES.md` | Catálogo de cada valor de configuración y quién lo consume |
 | `tests/` | `check-consistency.sh` (contrato de valores) + fixture `.nessus` |
+| `CHANGELOG.md` | Historial de versiones del laboratorio |
 | `.gitignore` | Excluye VMs, artefactos y secretos del escenario |
 
 ---

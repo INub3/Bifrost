@@ -1,0 +1,42 @@
+# Changelog
+
+Historial de versiones del laboratorio Bifrost.
+Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) ·
+versionado semántico.
+
+## [1.0.0] — 2026-11-22
+
+Primera versión estable. **Desarrollo cerrado**: el laboratorio está listo para
+construirse e implementarse. Los ajustes posteriores serán de implementación.
+
+### Añadido
+
+- **Configuración única** (`config/lab.env`) con cargadores para bash
+  (`config/lab.sh`), PowerShell (`config/lab.ps1`) y Python (parser interno de
+  `tenable_scan.py`). Ningún script repite IPs, puertos ni credenciales.
+- **Control del laboratorio**: `bifrost.sh` (Linux/macOS) y `bifrost.ps1`
+  (Windows) con `preflight`, `config`, `status`, `start/stop`, `snapshot`,
+  `reset`, `ip` y `scan`. Descubrimiento automático de `vmrun`.
+- **Buildsheets** de las seis VMs: `kali`, `scanner`, `web01`, `app02`, `dc01` y
+  `ws01`, con la anotación de en qué host se ejecuta cada paso.
+- **Provisioning Linux** (`provision/apply.sh`) y scripts PowerShell de Windows
+  (promover DC, instalar ADCS con ESC8, unir ws01 al dominio).
+- **Cadena Log4Shell** completa con autoprueba end-to-end (`selftest.sh`), que
+  verifica ejecución remota real antes del escenario.
+- **Cadena ESC8** documentada (PetitPotam → relay NTLM → certipy → DCSync).
+- **Cliente de Tenable One** (`tenable/tenable_scan.py`): crea, lanza, espera,
+  exporta `.nessus` y resume los hallazgos a Markdown.
+- **Runbook del directo** minuto a minuto, con matriz de contingencias.
+- **Verificador del contrato** (`tests/check-consistency.sh`): configuración
+  completa, cero literales en scripts, motores alineados y sin secretos sueltos.
+- **Guía de construcción** end-to-end (`BUILD.md`) con gates de verificación y
+  elección de host.
+
+### Notas de empaquetado
+
+- `.gitattributes` fuerza **LF**: evita que `core.autocrlf` rompa los `.sh` al
+  copiarlos a kali/Linux (`/bin/bash^M: bad interpreter`).
+- `.gitignore` excluye VMs, artefactos y **secretos del escenario**
+  (`*.pfx`, `*.ccache`, `*.kirbi`, `loot/`), pero versiona el fixture de tests.
+- La versión del laboratorio vive en `BIFROST_VERSION` (`config/lab.env`) y la
+  muestra `bifrost.* preflight`.

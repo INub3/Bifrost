@@ -46,7 +46,7 @@ Cada eslabón de la cadena debe cumplir 4 criterios:
 │                                                             │
 │   Red host-only 192.168.56.0/24  (SIN internet, SIN NAT)    │
 │                                                             │
-│   [kali .66] ───────┬──────── [nessus .10]                  │
+│   [kali .66] ───────┬──────── [scanner .10]                 │
 │                     │                                       │
 │            ┌────────┴─────────┐                             │
 │       DMZ simulada        LAN corporativa                   │
@@ -59,9 +59,9 @@ Cada eslabón de la cadena debe cumplir 4 criterios:
 
 ### Reglas de red (esto es lo que hace el demo creíble)
 
-- **Aislamiento total:** VMnet1 / host-only o bridge interno de Proxmox. Sin NAT, sin salida a internet.
+- **Aislamiento total:** VMnet1 / host-only en VMware Workstation o Fusion. Sin NAT, sin salida a internet.
 - **Pivote forzado:** el atacante *solo* alcanza `web01:8983`. Todo lo demás se llega desde `web01` con `chisel` / `ligolo-ng`. Eso convierte un exploit en una **campaña**.
-- **El escáner sí ve todo:** Nessus está en la misma red y escanea los 4 hosts. Esa asimetría (scanner ve todo, atacante ve una puerta) es un punto narrativo potente.
+- **El escáner sí ve todo:** el scanner está en la misma red y escanea los seis hosts. Esa asimetría (scanner ve todo, atacante ve una puerta) es un punto narrativo potente.
 - **Si usan Tenable Vulnerability Management en la nube:** Nessus local como *linked scanner*. El tráfico de gestión sale por el hotspot del presentador, el tráfico de escaneo nunca sale del host.
 
 ### Inventario
@@ -69,13 +69,13 @@ Cada eslabón de la cadena debe cumplir 4 criterios:
 | Host | OS | Rol | Vulnerabilidad sembrada | Bridge |
 |---|---|---|---|---|
 | `kali` | Kali | atacante | — | — |
-| `nessus` | Ubuntu | scanner | — | — |
-| `web01` | Ubuntu 20.04 | app expuesta | Solr 8.11.0 → Log4Shell (CVE-2021-44228) | 1: acceso inicial |
-| `app02` | Ubuntu 20.04 | servidor interno | kernel 5.13 / policykit 0.105 → CVE-2022-0847 o CVE-2021-4034 | 2: root |
-| `ws01` | Windows 10 | estación | credenciales en archivo compartido / sesión SMB | 3: movimiento lateral |
-| `dc01` | Server 2019 sin parchear | DC + ADCS | ESC8 (PetitPotam + relay) o CVE-2020-1472 | 4: Domain Admin |
+| `scanner` | Ubuntu + Nessus | scanner enlazado a Tenable One | — | — |
+| `web01` | Ubuntu 22.04 | app expuesta | Solr 8.11.0 → Log4Shell (CVE-2021-44228) | 1: acceso inicial |
+| `app02` | Ubuntu 20.04 | servidor interno | policykit 0.105 → PwnKit (CVE-2021-4034) | 2: root |
+| `ws01` | Windows 10 | estación | credenciales en recurso compartido / sesión SMB | 3: movimiento lateral |
+| `dc01` | Server 2019 | DC + ADCS | ESC8 (PetitPotam + relay) | 4: Domain Admin |
 
-**Hardware:** 4–5 VMs, 16 GB RAM cómodo, 12 GB mínimo. Snapshots en SSD.
+**Hardware:** 6 VMs, 14 GB RAM mínimo, 32 GB cómodo. Snapshots en SSD.
 
 ---
 
@@ -89,9 +89,9 @@ Cada bloque de la charla es un puente: **lo que dijo Nessus → lo que hice → 
 - **Evidencia:** `id`, `hostname`, `ip a`.
 - **Por qué este:** un `curl` de una línea. Cero dependencias, cero compilación, y el escáner lo detecta con precisión quirúrgica.
 
-### Puente 2 — Elevación: kernel / PwnKit
+### Puente 2 — Elevación: PwnKit
 - **Nessus:** requiere **credenciales** (checks locales). Aquí está el momento didáctico: *"sin credenciales veo la puerta; con credenciales veo la casa"*.
-- **Manual:** PoC de CVE-2022-0847 (Dirty Pipe) o CVE-2021-4034 (PwnKit) → `root`.
+- **Manual:** PoC de CVE-2021-4034 (PwnKit) sobre `policykit 0.105` → `root`. Alternativa: CVE-2022-0847 (Dirty Pipe) si el kernel instalado lo permite.
 - **Evidencia:** `uid=0(root)`.
 
 ### Puente 3 — Movimiento lateral
@@ -120,42 +120,35 @@ Cada bloque de la charla es un puente: **lo que dijo Nessus → lo que hice → 
 
 ## 4. Cómo construirlo (reproducible, no a mano)
 
-Nada de "instalar a mano y rezar". El repo se ve así:
+Nada de "instalar a mano y rezar". El repo real es este:
 
 ```
 Bifrost/
-├── packer/                 # imágenes base (vmware-iso / proxmox-iso)
-│   ├── ubuntu-2004.pkr.hcl
-│   └── windows-2019.pkr.hcl
-├── ansible/
-│   ├── site.yml
-│   └── roles/
-│       ├── vuln-solr/          # baja Solr 8.11.0 y lo deja expuesto
-│       ├── vuln-kernel/        # kernel exacto vulnerable
-│       ├── ad-dc/              # DC + dominio corp.local
-│       ├── adcs-esc8/          # CA + Web Enrollment por HTTP
-│       ├── decoys/             # archivos señuelo
-│       └── no-hardening/       # desactiva lo que estorba
-├── vagrant/                # Vagrantfile para iterar rápido
-├── tenable/
-│   ├── scan-policy.json        # perfil de escaneo versionado
-│   ├── creds.md                # SMB/WMI y SSH (nunca en el repo)
-│   └── run-scan.py             # API: lanza, espera, exporta .nessus
-├── runbook/                # guion minuto a minuto + comandos copy/paste
-└── slides/
+├── config/lab.env        # ÚNICA fuente de verdad (IPs, dominio, puertos, credenciales)
+├── bifrost.sh / .ps1     # ciclo de vida: preflight, snapshot, reset, scan
+├── buildsheets/          # construcción guiada de cada VM
+├── provision/apply.sh    # provisioning Linux por SSH
+├── windows/              # PowerShell: DC, ADCS/ESC8, unión de ws01
+├── exploits/             # cadenas Log4Shell y ESC8
+├── tenable/              # cliente de la API de Tenable One
+├── runbook/              # guion del directo
+└── tests/                # check-consistency.sh + fixture
 ```
 
-**Comandos objetivo:**
+Lo que **no** hay (y por qué) está en [README.md](README.md) §2: sin Vagrant, sin
+Packer, sin Ansible. La reproducibilidad la da el **snapshot**, no el tooling.
+
+**Comandos reales:**
 
 ```bash
-make build     # packer build de las 4 imágenes  (~40 min, una vez)
-make lab       # vagrant up / terraform apply    (~5 min)
-make snapshot  # estado "pre-demo" limpio
-make scan      # lanza el escaneo por API de Nessus y exporta resultados
-make reset     # revierte TODO a pre-demo en <60 s
+bash provision/apply.sh kali      # provisioning
+./bifrost.sh snapshot all clean   # estado base
+./bifrost.sh reset all            # revierte TODO a pre-demo en <60 s
+./bifrost.sh scan --action run    # escaneo por API
 ```
 
-`make reset` es el comando más importante del proyecto. Sin él no hay charla en vivo.
+`reset` es el comando más importante del proyecto. Sin él no hay charla en vivo.
+La guía completa, con gates, está en [BUILD.md](BUILD.md).
 
 ### Configuración de Tenable (lo que hay que dejar listo)
 
@@ -191,7 +184,7 @@ make reset     # revierte TODO a pre-demo en <60 s
 1. **Ensayo A — técnico:** build completo desde cero. Anotar tiempos reales de cada exploit.
 2. **Ensayo B — cronometrado:** guion completo, con proyector, sin ayudas.
 3. **Ensayo C — caos:** romper algo a propósito (apagar `web01`, bloquear el puerto, tardar el escaneo) y practicar el plan B en vivo.
-4. **Ensayo D — el día anterior:** `make reset`, verificar que el snapshot arranca, escaneo pre-lanzado y guardado.
+4. **Ensayo D — el día anterior:** `.\bifrost.ps1 reset all`, verificar que el snapshot arranca, escaneo pre-lanzado y guardado.
 
 **Regla:** nunca se estrena un comando en el escenario. Todo lo que se teclea en vivo está en el runbook y se ha ejecutado ≥5 veces.
 
@@ -204,7 +197,7 @@ make reset     # revierte TODO a pre-demo en <60 s
 | El escaneo tarda 20 min en vivo | Se lanza antes de empezar; en pantalla solo se muestra el progreso/resultado |
 | Exploit falla en el escenario | Plan B (tabla §3) + clip de respaldo de 90 s ya grabado |
 | Red del venue bloquea / no hay internet | Todo local; Tenable VM con hotspot propio; export `.nessus` offline |
-| ZeroLogon deja el DC inservible | Snapshot obligatorio + `make reset` |
+| ZeroLogon deja el DC inservible | Snapshot obligatorio + `reset all` |
 | Licencia de Nessus / límite de hosts | Verificar licencia con el equipo Tenable con semanas de antelación |
 | Se rompe el aislamiento y sale a internet | Regla de firewall explícita deny-all en el host; verificar con `tcpdump` |
 | Alguien pregunta "¿esto es real?" | Slide de alcance: infra propia, dominio falso, datos falsos, autorización por escrito |
@@ -229,10 +222,10 @@ Ese cierre convierte una demo de hacking en una conversación de **gestión de r
 ## 9. Checklist de arranque
 
 - [ ] Confirmar edición de Tenable disponible (Nessus Pro / Tenable VM / Tenable One) y licencia de hosts
-- [ ] Decidir hipervisor (VMware Workstation Pro para snapshots, o Proxmox si hay mini PC)
+- [ ] Confirmar hipervisor: VMware Workstation Pro 17.x (Windows/Linux) o Fusion 13.x (Mac Intel)
 - [ ] Nombre y tema del lab (Bifrost, `corp.local`)
 - [ ] Elegir el "wow" final: ESC8 vs ZeroLogon
-- [ ] Congelar versiones exactas (Solr 8.11.0, kernel, Server 2019 build sin parchear)
-- [ ] Primer `make build` y escaneo de validación con los 4 plugins visibles
+- [ ] Congelar versiones exactas (Solr 8.11.0, policykit, Server 2019)
+- [ ] Primer `preflight` en verde y escaneo de validación con los plugins visibles
 - [ ] Guion + slides (una slide por puente con el output crudo de Nessus)
 - [ ] Clip de respaldo grabado

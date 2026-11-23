@@ -84,6 +84,21 @@ Descarga estas ISOs antes de empezar (los enlaces están en cada buildsheet):
 bash tests/check-consistency.sh
 ```
 
+### 2.1 Qué host elegir
+
+Los scripts existen para las dos plataformas (`bifrost.ps1` y `bifrost.sh`), así que
+la decisión no bloquea nada: afecta cuánta fricción tienes al construir.
+
+| Host | Ventaja | Coste |
+|---|---|---|
+| **Linux (Ubuntu LTS)** — recomendado | bash nativo, sin MSYS, sin antivirus compitiendo con los `.vmdk` | instalar Workstation Pro a mano |
+| Windows | suele ser lo que ya tienes; `bifrost.ps1` cubre todo | git-bash, `core.autocrlf`, exclusiones de Defender |
+| macOS (Fusion) | bash nativo | **Apple Silicon no corre `dc01`/`ws01`** (x86): solo Mac Intel |
+
+En Windows conviene excluir la carpeta de VMs del antivirus
+(`Add-MpPreference -ExclusionPath $env:BIFROST_VM_DIR`) y no activar WSL2/Hyper-V
+junto a Workstation.
+
 ---
 
 ## 3. Fase 1 — kali (primero siempre)
