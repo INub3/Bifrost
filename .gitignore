@@ -1,0 +1,30 @@
+# =============================================================================
+#  Bifrost - artefactos generados y secretos que NUNCA van al repositorio
+# =============================================================================
+
+# --- VMs y resultados ---------------------------------------------------------
+vms/
+out/
+*.nessus
+*.nessus.md
+
+# --- Python -------------------------------------------------------------------
+__pycache__/
+*.pyc
+
+# --- Cadena Log4Shell (payload compilado y marshalsec clonado) -----------------
+exploits/log4shell/build/
+exploits/log4shell/marshalsec/
+
+# --- Secretos del escenario ----------------------------------------------------
+# El loot del puente 4 (certificados, TGT, hashes) es material sensible.
+*.pfx
+*.ccache
+*.kirbi
+loot/
+logs/
+payloads/
+
+# --- Credenciales de Tenable ---------------------------------------------------
+tenable.json
+.bifrost/
