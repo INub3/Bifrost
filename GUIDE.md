@@ -33,6 +33,34 @@ VMware.
 
 ---
 
+### Direccionamiento, gateway y DNS
+
+Red **host-only** `10.10.0.0/24`: sin router ni salida a internet.
+
+| Máquina | IP | Gateway | DNS |
+|---|---|---|---|
+| host (atacante) | `10.10.0.66` | **ninguno** | sin cambios (usa su DNS normal) |
+| scanner | `10.10.0.10` | ninguno (la NIC NAT da el suyo por DHCP) | `10.10.0.30` (opcional) |
+| web01 | `10.10.0.20` | **ninguno** | `10.10.0.30` (dc01) |
+| dc01 | `10.10.0.30` | ninguno | `127.0.0.1` (él mismo) |
+| ws01 | `10.10.0.31` | ninguno | `10.10.0.30` (dc01) |
+
+**Claves para no confundirte:**
+
+- **Gateway = ninguno.** Es una red aislada: nada rutea hacia fuera, así que no
+  hace falta default gateway. En Linux (netplan) se omite el bloque `routes`; en
+  Windows, `New-NetIPAddress` acepta IP sin gateway. Si algún campo lo exige,
+  pon `10.10.0.1`: es un valor nominal, no rutea nada.
+- **La IP del atacante NO tiene que ser `.1`.** El `.1` es solo la convención con
+  la que VMware asigna el adaptador del host (VMnet1). En host-only el host puede
+  estar en cualquier IP libre del segmento (aquí `.66`). Solo evita chocar con
+  `.10/.20/.30/.31`.
+- **DNS**: `dc01` es el DNS del dominio. `ws01` y `web01` apuntan a él; `dc01`
+  apunta a sí mismo (`127.0.0.1`). El host y el scanner no lo necesitan en VMnet1
+  (el scanner obtiene el suyo por la NIC NAT).
+
+---
+
 ## 2. Requisitos
 
 | Requisito | Mínimo | Recomendado |
@@ -83,8 +111,8 @@ Cada paso termina en un **gate**: no avances si falla.
 2. Asigna a tu interfaz host-only la IP del atacante:
 
 ```bash
-sudo ip addr add 192.168.56.66/24 dev vmnet1   # ajusta interfaz e IP a config/lab.env
-ip -br a | grep 192.168.56.66                   # confirma
+sudo ip addr add 10.10.0.66/24 dev vmnet1   # ajusta interfaz e IP a config/lab.env
+ip -br a | grep 10.10.0.66                   # confirma
 ```
 
 3. Preflight y contrato:
@@ -130,7 +158,26 @@ python tenable/tenable_scan.py --action policies     # existe Bifrost-Demo
 **En:** `VMware GUI` (crear) + consola de `web01` (instalar) + `host` (provisionar).
 
 1. VM Ubuntu Server **20.04** (importante: es la versión con `policykit 0.105`), 2 vCPU / 3 GB / 20 GB, red VMnet1, **NIC NAT activa solo para construir**.
-2. Instala con usuario `bifrost` + OpenSSH; IP estática `BIFROST_IP_WEB` (netplan); `open-vm-tools`.
+2. Instala con usuario `bifrost` + OpenSSH y `open-vm-tools`. IP estática por netplan (sin gateway, DNS = dc01):
+
+```yaml
+# /etc/netplan/00-bifrost.yaml   (cambia ens33 por tu interfaz real: 'ip -br a')
+network:
+  version: 2
+  ethernets:
+    ens33:
+      dhcp4: false
+      addresses: [10.10.0.20/24]
+      nameservers:
+        addresses: [10.10.0.30]   # dc01
+```
+
+```bash
+sudo chmod 600 /etc/netplan/00-bifrost.yaml && sudo netplan apply
+```
+
+La NIC NAT (segunda interfaz) se configura sola por DHCP y es la que da internet
+durante la construcción.
 3. Provisiona desde el host:
 
 ```bash
@@ -140,7 +187,7 @@ bash provision/apply.sh web01
 **Gate 2** (en `host`):
 
 ```bash
-curl -s "http://192.168.56.20:8983/solr/admin/info/system?wt=json" | head -c 300
+curl -s "http://10.10.0.20:8983/solr/admin/info/system?wt=json" | head -c 300
 # debe contener "solr-spec-version":"8.11.0"
 ```
 
@@ -349,7 +396,7 @@ Claves de `config/lab.env`. Cambia ahí y en ningún otro sitio.
 | Clave | Default | Uso |
 |---|---|---|
 | `BIFROST_VERSION` | `1.1.0` | informativo |
-| `BIFROST_NETWORK` / `BIFROST_PREFIX` / `BIFROST_GATEWAY` | `192.168.56.0` / `24` / `.1` | red aislada |
+| `BIFROST_NETWORK` / `BIFROST_PREFIX` / `BIFROST_GATEWAY` | `10.10.0.0` / `24` / `.1` (nominal) | red aislada |
 | `BIFROST_IP_ATTACKER` | `.66` | host atacante (VMnet1) |
 | `BIFROST_IP_SCANNER` | `.10` | Nessus |
 | `BIFROST_IP_WEB` | `.20` | web01 |

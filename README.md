@@ -22,7 +22,7 @@ contingencias → troubleshooting → catálogo de valores.
 ## Arquitectura (resumen)
 
 ```
-VMnet1 host-only (sin internet)
+VMnet1 host-only 10.10.0.0/24 (sin internet)
   .66  host (ParrotOS)   <- atacante y control
   .10  scanner           Nessus enlazado a Tenable One
   .20  web01             Ubuntu 20.04: Solr 8.11 (Log4Shell) + PwnKit + credenciales

@@ -3,18 +3,18 @@
      Sirve para validar el parser de tenable_scan.py sin credenciales. -->
 <NessusClientData_v2>
   <Report name="Bifrost-Demo">
-    <ReportHost name="192.168.56.20">
+    <ReportHost name="10.10.0.20">
       <HostProperties>
-        <tag name="host-ip">192.168.56.20</tag>
+        <tag name="host-ip">10.10.0.20</tag>
         <tag name="host-fqdn">web01.corp.local</tag>
         <tag name="operating-system">Linux Kernel 5.4</tag>
       </HostProperties>
       <ReportItem port="8983" svc_name="http" protocol="tcp" severity="4" pluginID="155999" pluginName="Apache Log4j 2.x Remote Code Execution (Log4Shell)" pluginFamily="CGI abuses"/>
       <ReportItem port="8983" svc_name="http" protocol="tcp" severity="2" pluginID="10107" pluginName="HTTP Server Type and Version" pluginFamily="Web Servers"/>
     </ReportHost>
-    <ReportHost name="192.168.56.30">
+    <ReportHost name="10.10.0.30">
       <HostProperties>
-        <tag name="host-ip">192.168.56.30</tag>
+        <tag name="host-ip">10.10.0.30</tag>
         <tag name="host-fqdn">dc01.corp.local</tag>
       </HostProperties>
       <ReportItem port="443" svc_name="www" protocol="tcp" severity="3" pluginID="999000" pluginName="ADCS Web Enrollment permite autenticacion NTLM sobre HTTP" pluginFamily="Windows"/>

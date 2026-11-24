@@ -48,7 +48,7 @@ else
 fi
 
 # --- 2. Sin literales en scripts --------------------------------------------- #
-hits="$(grep -rnE '192\.168\.56\.|Verano2024|Bifrost2026|Bifrost-Admin|Bifrost-DSRM' \
+hits="$(grep -rnE '10\.10\.0\.|192\.168\.56\.|Verano2024|Bifrost2026|Bifrost-Admin|Bifrost-DSRM' \
     "$ROOT" --include='*.sh' --include='*.ps1' --include='*.py' 2>/dev/null \
     | grep -v '/config/' | grep -v '/tests/' || true)"
 if [ -n "$hits" ]; then
