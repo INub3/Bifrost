@@ -166,10 +166,9 @@ foreach ($u in $users) {
 
 # La cuenta de servicio NO es privilegiada: el valor narrativo esta en que el
 # escaner no la distingue de cualquier otro hallazgo "medio".
-$svc = Get-ADUser -Identity $SvcUser -ErrorAction SilentlyContinue
-if ($svc) {
-    Add-ADGroupMember -Identity 'Domain Users' -Members $svc -ErrorAction SilentlyContinue
-}
+# No se anade a Domain Users: al crearla con New-ADUser ya queda en su grupo
+# primario, y Add-ADGroupMember lanza un error *terminante* si ya es miembro;
+# con $ErrorActionPreference='Stop' eso abortaba la fase 2 antes de la corona.
 
 # --------------------------------------------------------------------------- #
 # Joya de la corona

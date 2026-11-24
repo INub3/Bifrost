@@ -247,7 +247,24 @@ if dpkg --compare-versions "$PKEXEC_VERSION" lt "0.105-26ubuntu1.2" 2>/dev/null;
     echo "  [ OK ] vulnerable a CVE-2021-4034 (PwnKit)"
 else
     echo "  [WARN] policykit parcheado: el puente 2 necesita otra via"
+    echo "         Downgrade: policykit-1=0.105-26ubuntu1 (desde old-releases) + apt-mark hold"
 fi
+
+# PwnKit necesita argc=0. Desde 5.4.197 el kernel fuerza un argv[0] vacio
+# (mitigacion "exec: Force single empty string when argv is empty"), y en
+# Ubuntu 20.04 eso llega con los kernels >= 5.4.0-124. El release (5.4.0-26)
+# no la tiene: es el que hay que arrancar para el puente 2.
+KERNEL_VERSION="$(uname -r)"
+echo "  kernel: $KERNEL_VERSION"
+case "$KERNEL_VERSION" in
+    5.4.0-26-*)
+        echo "  [ OK ] kernel del release (sin mitigacion argv=0)"
+        ;;
+    *)
+        echo "  [WARN] kernel $KERNEL_VERSION: si es >= 5.4.0-124 trae la mitigacion"
+        echo "         argv=0 y PwnKit fallara; arranca el 5.4.0-26 desde GRUB."
+        ;;
+esac
 
 cat <<EOF
 

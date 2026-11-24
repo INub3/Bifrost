@@ -28,6 +28,9 @@ if ! command -v bifrost_load_config >/dev/null 2>&1; then
 fi
 bifrost_load_config "$_here"
 
+# pipx y los symlinks de herramientas viven en ~/.local/bin
+export PATH="$HOME/.local/bin:$PATH"
+
 log() { printf '\n[bifrost] %s\n' "$*"; }
 
 command -v apt-get >/dev/null 2>&1 || { echo "Esto espera un Debian/ParrotOS." >&2; exit 1; }
@@ -84,10 +87,41 @@ EOF
 fi
 
 # --------------------------------------------------------------------------- #
+# 3b. Firewall del host (si ufw esta activo)
+# --------------------------------------------------------------------------- #
+if command -v ufw >/dev/null 2>&1; then
+    log "Permitiendo puertos del laboratorio en ufw"
+    for port in "$BIFROST_LDAP_PORT" "$BIFROST_HTTP_PORT" "$BIFROST_PROBE_PORT" \
+                "$BIFROST_REVSHELL_PORT" 445; do
+        $SUDO ufw allow from "${BIFROST_NETWORK}/${BIFROST_PREFIX}" to any port "$port" proto tcp \
+            >/dev/null 2>&1 || true
+    done
+    echo "  [ OK ] reglas para ${BIFROST_NETWORK}/${BIFROST_PREFIX} (LDAP, HTTP, probe, shell y relay SMB)"
+fi
+
+# --------------------------------------------------------------------------- #
 # 4. Espacio de trabajo y variables de sesion
 # --------------------------------------------------------------------------- #
 log "Preparando ~/bifrost"
-mkdir -p "$HOME/bifrost/loot" "$HOME/bifrost/payloads" "$HOME/bifrost/logs"
+mkdir -p "$HOME/bifrost/loot" "$HOME/bifrost/payloads" "$HOME/bifrost/logs" "$HOME/bifrost/tools"
+
+# PetitPotam para la coercion de ESC8: no viene en impacket.
+if [ ! -f "$HOME/bifrost/tools/PetitPotam/PetitPotam.py" ]; then
+    log "Clonando PetitPotam"
+    git clone --depth 1 https://github.com/topotam/PetitPotam \
+        "$HOME/bifrost/tools/PetitPotam" >/dev/null 2>&1 || true
+fi
+
+# En Parrot impacket se instala como impacket-ntlmrelayx, etc. Crea los nombres
+# .py que usa la guia si no existen, y deja PetitPotam.py en ~/.local/bin.
+mkdir -p "$HOME/.local/bin"
+[ -x /usr/bin/impacket-ntlmrelayx ]  && ln -sf /usr/bin/impacket-ntlmrelayx  "$HOME/.local/bin/ntlmrelayx.py"  2>/dev/null || true
+[ -x /usr/bin/impacket-secretsdump ] && ln -sf /usr/bin/impacket-secretsdump "$HOME/.local/bin/secretsdump.py" 2>/dev/null || true
+[ -x /usr/bin/impacket-psexec ]      && ln -sf /usr/bin/impacket-psexec      "$HOME/.local/bin/psexec.py"      2>/dev/null || true
+[ -f "$HOME/bifrost/tools/PetitPotam/PetitPotam.py" ] && \
+    ln -sf "$HOME/bifrost/tools/PetitPotam/PetitPotam.py" "$HOME/.local/bin/PetitPotam.py" 2>/dev/null || true
+[ -f "$HOME/bifrost/tools/PetitPotam/PetitPotam.py" ] && \
+    chmod +x "$HOME/bifrost/tools/PetitPotam/PetitPotam.py" 2>/dev/null || true
 
 # Generado desde la unica fuente de verdad: nada de valores incrustados.
 cat > "$HOME/bifrost/env.sh" <<EOF

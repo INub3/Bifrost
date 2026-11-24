@@ -31,3 +31,20 @@ payloads/
 # --- Credenciales de Tenable ---------------------------------------------------
 tenable.json
 .bifrost/
+
+# --- SO / editores / temporales ------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# --- Artefactos varios ---------------------------------------------------------
+*.zip
+*.iso
+*.pcap
+*.pcapng
+*.pem
+*.key
+*.crt
+*.csr
+*.log

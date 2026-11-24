@@ -4,8 +4,8 @@
 red team demuestra.* Tenable One (Vulnerability Management + Attack Path Analysis)
 · VMware Workstation Pro 17.x / Fusion 13.x · ESC8 como final.
 
-**Versión:** v1.1.0 — host como atacante, web01 concentra Log4Shell + PwnKit, guía
-única. Historial en [CHANGELOG.md](CHANGELOG.md).
+**Versión:** v1.1.1 — host como atacante, web01 concentra Log4Shell + PwnKit,
+guía única. Historial en [CHANGELOG.md](CHANGELOG.md).
 
 ---
 

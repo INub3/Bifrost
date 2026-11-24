@@ -4,6 +4,41 @@ Historial de versiones del laboratorio Bifrost.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) ·
 versionado semántico.
 
+## [1.1.1] — 2026-11-24
+
+Correcciones de build y de documentación detectadas en la puesta a punto real
+del laboratorio.
+
+### Corregido
+
+- **Log4Shell**: el disparo `curl` se comía las llaves de `${jndi:...}` por el
+  globbing de URL. Se añade `-g` en `selftest.sh`, `ldap-serve.sh` y `GUIDE.md`.
+  Además, `selftest.sh`/`ldap-serve.sh` matan el `http.server` real (`exec`) para
+  no dejar huérfanos en el 8000.
+- **dc01**: `Add-ADGroupMember` lanzaba un error terminante si `svc_backup` ya
+  era miembro y abortaba la fase 2 antes de la corona. Se elimina la llamada
+  redundante.
+- **dc01/ADCS**: el chequeo de Web Enrollment miraba `CertEnroll` (lo crea el
+  CA) y se saltaba la instalación; ahora comprueba la app `/CertSrv` y resetea
+  el role si quedó a medias.
+- **ws01**: re-ejecutar el script fallaba con `Instance DefaultGateway already
+  exists`; se borra la ruta `0.0.0.0/0` antes de recrear el gateway. El share
+  usa el SID de Everyone (funciona en Windows en español) y abre el 445.
+- **web01**: `web01-solr.sh` avisa del kernel con mitigación *argv=0* (PwnKit
+  necesita el `5.4.0-26`) y del cierre de SSH por ufw.
+- **host**: `attacker-tools.sh` permite los puertos del laboratorio en ufw,
+  clona PetitPotam y deja los nombres `ntlmrelayx.py`/`secretsdump.py`/
+  `psexec.py` para impacket 0.12.
+- **bifrost.sh**: `snapshot` acepta etiqueta (`clean`/`pre-demo`); antes siempre
+  usaba `BIFROST_SNAPSHOT`.
+
+### Documentación
+
+- `GUIDE.md`: pasos de PwnKit/kernel, ADCS, ws01, escaneo por UI, snapshots y
+  troubleshooting ampliados con los fallos reales.
+- `.gitignore`: temporales de SO/editor, artefactos (`*.zip`, `*.iso`,
+  `*.pcap`, certificados) y logs.
+
 ## [1.1.0] — 2026-11-23
 
 Reorganización del laboratorio para simplificar la implementación.

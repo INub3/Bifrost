@@ -91,9 +91,22 @@ else {
 # 3. Web Enrollment
 # --------------------------------------------------------------------------- #
 Write-Step 'Instalando Web Enrollment'
-$certsrv = 'C:\Windows\System32\CertSrv\CertEnroll'
-if (-not (Test-Path $certsrv)) {
-    Install-AdcsWebEnrollment -Force
+# OJO: comprobar C:\Windows\System32\CertSrv\CertEnroll NO sirve: lo crea el CA.
+# Lo correcto es comprobar la aplicacion /CertSrv en IIS.
+Import-Module WebAdministration -ErrorAction SilentlyContinue
+$certsrvApp = Get-WebApplication -Site 'Default Web Site' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -eq '/CertSrv' }
+if (-not $certsrvApp) {
+    try {
+        Install-AdcsWebEnrollment -Force
+    }
+    catch {
+        # Si quedo a medias (p. ej. el CA aun no estaba configurado), el cmdlet
+        # responde "role is already installed": se resetea el role y se repite.
+        Write-Host '   Web Enrollment a medias; reiniciando el role ...' -ForegroundColor Yellow
+        Uninstall-AdcsWebEnrollment -Force -ErrorAction SilentlyContinue
+        Install-AdcsWebEnrollment -Force
+    }
     Write-Ok 'Web Enrollment instalado'
 }
 else {

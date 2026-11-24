@@ -75,6 +75,10 @@ if (-not $adapter) { throw 'No hay adaptador activo.' }
 Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
     Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
 
+# Re-ejecuciones: la ruta por defecto anterior hace fallar el -DefaultGateway
+Get-NetRoute -InterfaceIndex $adapter.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+    Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+
 New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $StaticIp `
     -PrefixLength ([int]$PrefixLen) -DefaultGateway $Gateway | Out-Null
 Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses $DnsIp
@@ -139,16 +143,25 @@ Equipo de ventas
 '@ | Set-Content -Path "$SharePath\RRHH\evaluaciones_Q3.txt" -Encoding UTF8
 
 # Permisos amplios por diseno: es el hallazgo "SMB share permits write".
+# Se usa el SID S-1-1-0 (Everyone) para que funcione tambien en Windows en
+# espanol, donde la cuenta se muestra como "Todos".
+$everyoneSid = New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0')
 $acl = Get-Acl $SharePath
 $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-    'Everyone', 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+    $everyoneSid, 'Modify', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
 $acl.AddAccessRule($rule)
 Set-Acl -Path $SharePath -AclObject $acl
 
 if (-not (Get-SmbShare -Name 'Compartido' -ErrorAction SilentlyContinue)) {
-    New-SmbShare -Name 'Compartido' -Path $SharePath -FullAccess 'Everyone' | Out-Null
+    $everyoneName = $everyoneSid.Translate([System.Security.Principal.NTAccount]).Value
+    New-SmbShare -Name 'Compartido' -Path $SharePath -FullAccess $everyoneName | Out-Null
 }
-Write-Ok "$SharePath compartido (Everyone: Modify)"
+
+# El share no abre el firewall; SMB-In hace falta para el escaneo y el ataque.
+New-NetFirewallRule -DisplayName 'Bifrost SMB-In' -Direction Inbound -Protocol TCP `
+    -LocalPort 445 -Action Allow -ErrorAction SilentlyContinue | Out-Null
+
+Write-Ok "$SharePath compartido (Everyone/Todos: Modify)"
 
 # --------------------------------------------------------------------------- #
 # 5. Sesion de la cuenta de servicio
