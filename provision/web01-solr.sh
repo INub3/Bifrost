@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  web01 - Solr 8.11.0 vulnerable a Log4Shell (CVE-2021-44228)
-#  Puente 1 del laboratorio Bifrost.
+#  web01 - unica maquina Linux objetivo del laboratorio.
 #
-#  Valores: config/lab.env (version, puerto, red permitida).
+#  Concentra tres puentes:
+#    1. Log4Shell  -> Solr 8.11.0 + JDK 11 con trustURLCodebase=true
+#    2. PwnKit     -> policykit 0.105 (Ubuntu 20.04) + usuario local svc_app
+#    3. Lateral    -> credenciales de dominio svc_backup sembradas en /opt/app
 #
-#  Ejecucion normal (recomendada):
+#  OS: Ubuntu Server 20.04 SIN actualizar (necesita policykit 0.105).
+#
+#  Ejecucion normal:
 #      ./provision/apply.sh web01
 #
-#  Ejecucion manual:
-#      BIFROST_CONFIG=./config/lab.env sudo -E bash provision/web01-solr.sh
-#
-#  REQUIERE INTERNET durante la construccion (paquetes y tarball). La regla del
-#  laboratorio es: NIC NAT activa mientras se construye, retirada antes del
-#  snapshot "clean". Si no hay salida, el script lo dice y se detiene.
+#  REQUIERE INTERNET durante la construccion (NIC NAT). Retirar antes del
+#  snapshot "clean".
 # =============================================================================
 set -euo pipefail
 
@@ -45,6 +45,9 @@ SOLR_DATA="/var/solr"
 SOLR_URL="https://archive.apache.org/dist/lucene/solr/${SOLR_VERSION}/solr-${SOLR_VERSION}.tgz"
 JAVA_HOME_DIR="/usr/lib/jvm/java-11-openjdk-amd64"
 
+APP_USER="$BIFROST_APP_USER"
+APP_PASS="$BIFROST_APP_PASS"
+
 log() { printf '\n[bifrost] %s\n' "$*"; }
 die() { printf '[bifrost] ERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -62,23 +65,36 @@ if ! curl -sfI --max-time 8 https://archive.apache.org/ >/dev/null 2>&1; then
     - ejecuta este script
     - retira o desactiva la NIC NAT antes del snapshot "clean"
 
-  Ver buildsheets/linux-vms.md, seccion "Construccion vs demostracion".
+  Ver GUIDE.md, paso 2.
 EOF
     exit 1
 fi
 
 # --------------------------------------------------------------------------- #
-# 1. Dependencias
+# 1. Dependencias (Ubuntu 20.04 ya vive en old-releases)
 # --------------------------------------------------------------------------- #
-log "Instalando JDK 11"
+log "Configurando apt (20.04 esta en old-releases)"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
+
+if ! apt-get update -qq 2>/dev/null; then
+    echo "  apt fallo; redirigiendo a old-releases.ubuntu.com..."
+    sed -i -e 's|archive.ubuntu.com|old-releases.ubuntu.com|g' \
+           -e 's|security.ubuntu.com|old-releases.ubuntu.com|g' \
+           /etc/apt/sources.list 2>/dev/null || true
+    for f in /etc/apt/sources.list.d/*.list; do
+        [ -f "$f" ] && sed -i -e 's|archive.ubuntu.com|old-releases.ubuntu.com|g' \
+                               -e 's|security.ubuntu.com|old-releases.ubuntu.com|g' "$f"
+    done
+    apt-get update -qq
+fi
+
+log "Instalando JDK 11"
 apt-get install -y -qq openjdk-11-jdk-headless curl tar ufw >/dev/null
 
 [ -d "$JAVA_HOME_DIR" ] || die "no aparece $JAVA_HOME_DIR"
 
 # --------------------------------------------------------------------------- #
-# 2. Usuario y descarga
+# 2. Usuario del servicio y descarga de Solr
 # --------------------------------------------------------------------------- #
 if ! id solr >/dev/null 2>&1; then
     log "Creando usuario solr"
@@ -106,11 +122,8 @@ mkdir -p "$SOLR_DATA/logs"
 chown -R solr:solr "$SOLR_DATA"
 
 # --------------------------------------------------------------------------- #
-# 3. La deuda tecnica que hace posible el puente
+# 3. trustURLCodebase: la deuda tecnica del puente 1
 # --------------------------------------------------------------------------- #
-# Solr 8.11 corre en JDK 11, donde la carga remota de clases por JNDI esta
-# desactivada por defecto. Esta bandera la reactiva: el tipo de opcion legacy
-# que un administrador deja puesta "por compatibilidad".
 SOLR_IN_SH="$SOLR_HOME/bin/solr.in.sh"
 
 if ! grep -q 'trustURLCodebase' "$SOLR_IN_SH"; then
@@ -162,7 +175,32 @@ ufw allow from "${BIFROST_NETWORK}/${BIFROST_PREFIX}" to any port "$SOLR_PORT" p
 ufw --force enable >/dev/null 2>&1 || true
 
 # --------------------------------------------------------------------------- #
-# 6. Verificacion
+# 6. Usuario local + senuelos (puentes 2 y 3)
+# --------------------------------------------------------------------------- #
+if ! id "$APP_USER" >/dev/null 2>&1; then
+    log "Creando usuario local $APP_USER"
+    useradd -m -s /bin/bash "$APP_USER"
+    echo "${APP_USER}:${APP_PASS}" | chpasswd
+fi
+
+# Senuelo del puente 3: credenciales de dominio en un deploy legible.
+mkdir -p /opt/app
+cat > /opt/app/config.yml <<EOF
+# Despliegue interno - laboratorio $BIFROST_LAB_NAME
+app:
+  name: intranet-backup
+  port: 8080
+
+# TODO: mover a boveda de secretos
+domain:
+  realm: ${BIFROST_DOMAIN^^}
+  bind_user: $BIFROST_SVC_USER
+  bind_password: "$BIFROST_SVC_PASS"
+EOF
+chmod 644 /opt/app/config.yml
+
+# --------------------------------------------------------------------------- #
+# 7. Verificacion de Solr
 # --------------------------------------------------------------------------- #
 log "Esperando a que Solr levante"
 for _ in $(seq 1 30); do
@@ -184,20 +222,31 @@ if ! curl -sf -o /dev/null "http://127.0.0.1:${SOLR_PORT}/solr/intranet/admin/pi
     su -s /bin/bash solr -c "$SOLR_HOME/bin/solr create -c intranet -p $SOLR_PORT" >/dev/null 2>&1 || true
 fi
 
-# Credenciales del servidor interno dentro de la configuracion del core: es el
-# puente 3. Un operador que ya tiene shell en web01 las lee en un segundo.
+# Credenciales del usuario local dentro de la configuracion del core (puente 2).
 CORE_CONF="$SOLR_HOME/server/solr/intranet/conf"
 if [ -d "$CORE_CONF" ]; then
     cat > "$CORE_CONF/db.properties" <<EOF
 # Conexion de la app de reportes
-db.host=$BIFROST_IP_APP
-db.user=$BIFROST_APP_USER
-db.password=$BIFROST_APP_PASS
+db.user=$APP_USER
+db.password=$APP_PASS
 EOF
     chown solr:solr "$CORE_CONF/db.properties"
     chmod 640 "$CORE_CONF/db.properties"
 else
-    printf '[bifrost] ADVERTENCIA: no existe %s; el puente 3 no tendra credenciales\n' "$CORE_CONF" >&2
+    printf '[bifrost] ADVERTENCIA: no existe %s; el puente 2 no tendra credenciales\n' "$CORE_CONF" >&2
+fi
+
+# --------------------------------------------------------------------------- #
+# 8. Diagnostico de PwnKit (puente 2)
+# --------------------------------------------------------------------------- #
+log "Diagnostico de PwnKit (CVE-2021-4034)"
+PKEXEC_VERSION=$(dpkg-query -W -f='${Version}' policykit-1 2>/dev/null || echo "ausente")
+echo "  policykit-1: $PKEXEC_VERSION"
+
+if dpkg --compare-versions "$PKEXEC_VERSION" lt "0.105-26ubuntu1.2" 2>/dev/null; then
+    echo "  [ OK ] vulnerable a CVE-2021-4034 (PwnKit)"
+else
+    echo "  [WARN] policykit parcheado: el puente 2 necesita otra via"
 fi
 
 cat <<EOF
@@ -208,8 +257,11 @@ cat <<EOF
    Endpoint  : http://${BIFROST_IP_WEB}:${SOLR_PORT}/solr/
    JVM       : JDK 11 con trustURLCodebase=true
    Core      : intranet
+   Local user: $APP_USER (credenciales en el core 'intranet')
+   Domain    : credenciales de $BIFROST_SVC_USER en /opt/app/config.yml
+   PwnKit    : ver diagnostico arriba
 
- Siguiente (en kali):
+ Siguiente (desde el HOST atacante):
    cd exploits/log4shell
    ./build.sh
    ./selftest.sh

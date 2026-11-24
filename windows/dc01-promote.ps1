@@ -1,4 +1,4 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     dc01 - promueve el controlador de dominio y siembra el contenido de la charla.
@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 $lib = Join-Path $PSScriptRoot '..\config\lab.ps1'
 if (-not (Test-Path -LiteralPath $lib)) {
     throw ('No se encontro config\lab.ps1. Copia la carpeta config\ junto a windows\ ' +
-           'en la VM (ver buildsheets/windows-vms.md).')
+           'en la VM (ver GUIDE.md).')
 }
 . $lib
 $cfg = Import-BifrostLabConfig -Root $PSScriptRoot

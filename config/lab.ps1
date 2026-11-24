@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     config/lab.ps1 - carga de config/lab.env para todos los scripts PowerShell.
@@ -16,8 +16,8 @@
 
 $script:BifrostRequiredKeys = @(
     'BIFROST_NETWORK', 'BIFROST_PREFIX', 'BIFROST_GATEWAY',
-    'BIFROST_IP_KALI', 'BIFROST_IP_SCANNER', 'BIFROST_IP_WEB',
-    'BIFROST_IP_APP', 'BIFROST_IP_DC', 'BIFROST_IP_WS',
+    'BIFROST_IP_ATTACKER', 'BIFROST_IP_SCANNER', 'BIFROST_IP_WEB',
+    'BIFROST_IP_DC', 'BIFROST_IP_WS',
     'BIFROST_DOMAIN', 'BIFROST_NETBIOS',
     'BIFROST_SVC_USER', 'BIFROST_SVC_PASS',
     'BIFROST_APP_USER', 'BIFROST_APP_PASS',
@@ -113,7 +113,7 @@ function Resolve-BifrostSetting {
     if ($Default) { return $Default }
     if ($Required) {
         throw ("Falta '$Key'. Copia la carpeta config\ junto a windows\ en la VM " +
-               "(ver buildsheets/windows-vms.md) o pasa el parametro equivalente.")
+               "(ver GUIDE.md) o pasa el parametro equivalente.")
     }
     return ''
 }

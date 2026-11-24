@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Bifrost - control de ciclo de vida del laboratorio sobre VMware Workstation/Fusion.
@@ -156,7 +156,7 @@ function Resolve-LabVm {
 
     $vms = @(Get-LabVms)
     if ($vms.Count -eq 0) {
-        throw "No hay VMs en '$script:LabRoot'. Construyelas segun buildsheets/."
+        throw "No hay VMs en '$script:LabRoot'. Construyelas segun GUIDE.md."
     }
 
     $vm = $vms | Where-Object { $_.Name -eq $Name } | Select-Object -First 1
@@ -314,7 +314,7 @@ function Invoke-Preflight {
         Write-Check OK 'Cliente OpenSSH disponible'
     }
     else {
-        Write-Check WARN 'Cliente ssh no encontrado' 'Opcional: se puede provisionar desde kali'
+        Write-Check WARN 'Cliente ssh no encontrado' 'Opcional: se puede provisionar desde el host atacante'
         $warnings++
     }
 
@@ -338,7 +338,7 @@ function Invoke-Status {
     Write-Section 'VMs del laboratorio'
     $vms = @(Get-LabVms)
     if ($vms.Count -eq 0) {
-        Write-Check WARN "Sin VMs en $script:LabRoot" 'Sigue buildsheets/'
+        Write-Check WARN "Sin VMs en $script:LabRoot" 'Sigue GUIDE.md'
         return
     }
 

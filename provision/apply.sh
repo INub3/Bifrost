@@ -8,9 +8,10 @@
 #
 #  Uso:
 #      ./provision/apply.sh web01
-#      ./provision/apply.sh app02
-#      ./provision/apply.sh kali
 #      ./provision/apply.sh web01 --dry-run
+#
+#  El atacante es el HOST (ParrotOS): su provisioning es provision/attacker-tools.sh
+#  y se ejecuta LOCALMENTE, no por SSH. Windows se configura con windows/*.ps1.
 # =============================================================================
 set -uo pipefail
 
@@ -24,11 +25,10 @@ DRY_RUN=0
 [ "${2:-}" = "--dry-run" ] && DRY_RUN=1
 
 case "$TARGET" in
-    web01) IP="$BIFROST_IP_WEB";  USER="$BIFROST_SSH_USER";  SCRIPT="web01-solr.sh";    SUDO="sudo" ;;
-    app02) IP="$BIFROST_IP_APP";  USER="$BIFROST_SSH_USER";  SCRIPT="app02-privesc.sh"; SUDO="sudo" ;;
-    kali)  IP="$BIFROST_IP_KALI"; USER="$BIFROST_KALI_USER"; SCRIPT="kali-tools.sh";    SUDO="" ;;
+    web01) IP="$BIFROST_IP_WEB"; USER="$BIFROST_SSH_USER"; SCRIPT="web01-solr.sh"; SUDO="sudo" ;;
     *)
-        echo "Uso: $0 <web01|app02|kali> [--dry-run]" >&2
+        echo "Uso: $0 web01 [--dry-run]" >&2
+        echo "     (el atacante es el host: usa provision/attacker-tools.sh)" >&2
         echo "     (Windows se configura con windows/*.ps1 dentro de la VM)" >&2
         exit 1
         ;;

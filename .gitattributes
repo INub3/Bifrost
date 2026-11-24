@@ -1,7 +1,7 @@
 # =============================================================================
 #  Bifrost - normalizacion de finales de linea
 #
-#  Los scripts (.sh) se ejecutan en Linux/kali: DEBEN tener LF siempre. Sin esta
+#  Los scripts (.sh) se ejecutan en Linux (host y VMs): DEBEN tener LF siempre. Sin esta
 #  regla, un Windows con core.autocrlf=true los convierte a CRLF al hacer checkout
 #  y aparecen errores del tipo "/bin/bash^M: bad interpreter".
 #

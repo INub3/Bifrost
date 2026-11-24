@@ -268,7 +268,7 @@ cmd_status() {
     vms="$(list_vms)"
     if [ -z "$vms" ]; then
         warn "Sin VMs en $VM_DIR"
-        hint "Sigue buildsheets/"
+        hint "Sigue GUIDE.md"
         return 0
     fi
 

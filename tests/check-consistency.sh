@@ -76,7 +76,7 @@ import tenable_scan
 print(tenable_scan.default_targets())
 PY
 )"
-    bash_targets="$BIFROST_IP_WEB,$BIFROST_IP_APP,$BIFROST_IP_DC,$BIFROST_IP_WS"
+    bash_targets="$BIFROST_IP_WEB,$BIFROST_IP_DC,$BIFROST_IP_WS"
 
     if [ "$py_targets" = "$bash_targets" ]; then
         pass "bash y Python derivan los mismos objetivos ($bash_targets)"

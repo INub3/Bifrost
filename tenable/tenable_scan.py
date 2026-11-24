@@ -88,7 +88,7 @@ TERMINAL_STATES = {"completed", "canceled", "aborted", "imported", "error"}
 
 SEVERITY = {0: "Info", 1: "Bajo", 2: "Medio", 3: "Alto", 4: "Critico"}
 
-TARGET_KEYS = ("BIFROST_IP_WEB", "BIFROST_IP_APP", "BIFROST_IP_DC", "BIFROST_IP_WS")
+TARGET_KEYS = ("BIFROST_IP_WEB", "BIFROST_IP_DC", "BIFROST_IP_WS")
 
 
 def default_base_url() -> str:

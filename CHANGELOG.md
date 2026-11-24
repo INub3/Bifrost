@@ -4,6 +4,29 @@ Historial de versiones del laboratorio Bifrost.
 Formato basado en [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) ·
 versionado semántico.
 
+## [1.1.0] — 2026-11-23
+
+Reorganización del laboratorio para simplificar la implementación.
+
+### Cambiado
+
+- **El host es el atacante**: se elimina la VM Kali. El host (ParrotOS) actúa de
+  atacante a través de la interfaz host-only (VMnet1). `BIFROST_IP_KALI` pasa a
+  `BIFROST_IP_ATTACKER` y `provision/kali-tools.sh` se reemplaza por
+  `provision/attacker-tools.sh` (se ejecuta localmente, sin SSH).
+- **web01 absorbe app02**: una sola VM Linux concentra Log4Shell, PwnKit y las
+  credenciales de dominio. web01 pasa a Ubuntu 20.04 (necesita `policykit 0.105`).
+- **Cadena de 3 objetivos**: Log4Shell → PwnKit (root) → lateral (`svc_backup`) →
+  ESC8. Se eliminan `BIFROST_IP_APP` y el objetivo app02 del escaneo.
+
+### Documentación
+
+- **Guía maestra única** (`GUIDE.md`) que centraliza diseño, construcción, cadena
+  de ataque, directo y troubleshooting en un solo documento secuencial.
+- Se eliminan `BIFROST-LAB.md`, `BUILD.md`, `buildsheets/`, `runbook/`,
+  `docs/VALUES.md` y `exploits/esc8/README.md` (contenido absorbido por GUIDE.md).
+- `README.md` queda como página de aterrizaje.
+
 ## [1.0.0] — 2026-11-22
 
 Primera versión estable. **Desarrollo cerrado**: el laboratorio está listo para

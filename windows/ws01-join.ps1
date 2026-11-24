@@ -1,4 +1,4 @@
-﻿#Requires -RunAsAdministrator
+#Requires -RunAsAdministrator
 <#
 .SYNOPSIS
     ws01 - estacion de trabajo del dominio, con credenciales "encontrables" y
@@ -32,7 +32,7 @@ $ErrorActionPreference = 'Stop'
 $lib = Join-Path $PSScriptRoot '..\config\lab.ps1'
 if (-not (Test-Path -LiteralPath $lib)) {
     throw ('No se encontro config\lab.ps1. Copia la carpeta config\ junto a windows\ ' +
-           'en la VM (ver buildsheets/windows-vms.md).')
+           'en la VM (ver GUIDE.md).')
 }
 . $lib
 $cfg = Import-BifrostLabConfig -Root $PSScriptRoot
@@ -115,7 +115,7 @@ foreach ($dir in @($SharePath, "$SharePath\RRHH", "$SharePath\IT", "$SharePath\P
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <appSettings>
-    <add key="ApiUrl" value="http://app02.$DomainName:8080" />
+    <add key="ApiUrl" value="http://web01.$DomainName:8080" />
     <add key="BackupAccount" value="$(($DomainName -split '\.')[0].ToUpper())\$SvcUser" />
     <add key="BackupPassword" value="$SvcPassword" />
   </appSettings>
@@ -126,7 +126,7 @@ foreach ($dir in @($SharePath, "$SharePath\RRHH", "$SharePath\IT", "$SharePath\P
 @"
 TRASPASO - cliente de copias
 --------------------------------
-Servidor: app02.$DomainName
+Servidor: web01.$DomainName
 Cuenta:   $(($DomainName -split '\.')[0].ToUpper())\$SvcUser
 Clave:    $SvcPassword
 
