@@ -39,6 +39,7 @@ Cadena: **Log4Shell → root (PwnKit) → lateral (svc_backup) → ESC8 → Doma
 | Ruta | Qué es |
 |---|---|
 | [GUIDE.md](GUIDE.md) | **Guía maestra** (construcción + explotación, secuencial) |
+| [ATTACK.md](ATTACK.md) | **Guion de ataque comando a comando** (lógica del red team + speech + contraste con Nessus) |
 | [config/lab.env](config/lab.env) | Única fuente de verdad (IPs, dominio, puertos, credenciales) |
 | `config/lab.sh` / `config/lab.ps1` | Cargadores de la configuración (bash / PowerShell) |
 | `bifrost.sh` / `bifrost.ps1` | Ciclo de vida: `preflight` · `config` · `status` · `snapshot` · `reset` · `scan` |

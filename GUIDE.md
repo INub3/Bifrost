@@ -399,6 +399,9 @@ python tenable/tenable_scan.py --action summary --file out/Bifrost_Smoke.nessus 
 
 ## 5. La cadena de ataque (comandos copy/paste)
 
+> La versión **detallada, comando a comando, con la lógica del atacante y el
+> speech para el escenario** está en [ATTACK.md](ATTACK.md). Aquí, lo esencial.
+
 Todo desde el **host atacante**. Antes: `source ~/bifrost/env.sh`.
 
 ### Puente 1 — Log4Shell
