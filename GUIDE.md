@@ -476,7 +476,7 @@ impacket-psexec -hashes :<HASH_ADMIN> 'corp.local/Administrator@'"$TARGET_DC"
 | 08:00 | **Puente 1** Log4Shell | tú (`host`) |
 | 12:00 | **Puente 2** privesc | tú (`host`) |
 | 15:00 | **Puente 3** lateral | tú (`host`) |
-| 19:00 | **Puente 4** ESC8 → DA | tú (`host`) |
+| 19:00 | **Puente 4** Backup Operators → DA | tú (`host`) |
 | 24:00 | Impacto controlado (leer, no cifrar) | tú (`host`) |
 | 26:00 | Blue team: 4624/4625, 4768/4769, 4886/4887, 4662 | Tenable (`Tenable UI`) |
 | 29:00 | Cierre | ambos |
