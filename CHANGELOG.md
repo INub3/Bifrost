@@ -20,7 +20,11 @@ del laboratorio.
   redundante.
 - **dc01/ADCS**: el chequeo de Web Enrollment miraba `CertEnroll` (lo crea el
   CA) y se saltaba la instalación; ahora comprueba la app `/CertSrv` y resetea
-  el role si quedó a medias.
+  el role si quedó a medias. Además se desactiva **Extended Protection** (EPA)
+  y se dejan los providers `Negotiate,NTLM`: con EPA en `Require` el relay
+  falla con `Authenticating ... as CORP/DC01$ FAILED`. También se desactiva el
+  modo kernel (`useKernelMode=false`), que en Server 2019 rechaza el NTLM de la
+  cuenta de equipo con `0xC000006D`/`0x0`.
 - **ws01**: re-ejecutar el script fallaba con `Instance DefaultGateway already
   exists`; se borra la ruta `0.0.0.0/0` antes de recrear el gateway. El share
   usa el SID de Everyone (funciona en Windows en español) y abre el 445.

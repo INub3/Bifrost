@@ -136,7 +136,26 @@ Set-WebConfigurationProperty -PSPath 'IIS:\' -Location $site `
     -Filter 'system.webServer/security/access' `
     -Name sslFlags -Value 'None'
 
-Write-Ok 'Certsrv: anonimo OFF, NTLM ON, SSL requerido OFF'
+# Extended Protection OFF y NTLM entre los proveedores: si EPA queda en
+# 'Require' (channel binding), IIS rechaza el NTLM retransmitido y el relay
+# falla con "Authenticating against ... as CORP/DC01$ FAILED".
+Set-WebConfigurationProperty -PSPath 'IIS:\' -Location $site `
+    -Filter 'system.webServer/security/authentication/windowsAuthentication' `
+    -Name extendedProtection.tokenChecking -Value 'None'
+Set-WebConfigurationProperty -PSPath 'IIS:\' -Location $site `
+    -Filter 'system.webServer/security/authentication/windowsAuthentication' `
+    -Name extendedProtection.flags -Value 'None'
+Set-WebConfigurationProperty -PSPath 'IIS:\' -Location $site `
+    -Filter 'system.webServer/security/authentication/windowsAuthentication/providers' `
+    -Name '.' -Value @('Negotiate','NTLM')
+
+# Algunos Server 2019 rechazan en modo kernel el NTLM de la cuenta de equipo
+# (DC01$) con 0xC000006D/0x0; el modo gestionado (app pool) lo acepta.
+Set-WebConfigurationProperty -PSPath 'IIS:\' -Location $site `
+    -Filter 'system.webServer/security/authentication/windowsAuthentication' `
+    -Name useKernelMode -Value $false
+
+Write-Ok 'Certsrv: anonimo OFF, NTLM ON, EPA OFF, kernel OFF, SSL requerido OFF'
 
 # --------------------------------------------------------------------------- #
 # 5. Verificacion
